@@ -1587,11 +1587,8 @@
  :settings.general/theme-light "Svetlý"
  :settings.general/theme-system "Systémový"
 
- :settings.sync-server/clear-success "URL synchronizačného servera bolo vymazané. Použije sa oficiálny Logseq Sync."
- :settings.sync-server/reset "Resetovať na predvolený"
  :settings.sync-server/save-success "URL synchronizačného servera bolo uložené."
  :settings.sync-server/url "URL synchronizačného servera"
- :settings.sync-server/url-desc "Nastavte vlastnú HTTPS URL synchronizačného servera pre self-hosted synchronizáciu. Vaše autentifikačné tokeny Logseq budú odoslané na tento server, preto používajte iba dôveryhodnú URL. Nechajte prázdne pre použitie oficiálneho Logseq Sync."
  :settings.sync-server/url-invalid-error "URL musí začínať na https:// alebo http://"
 
  :shell/input-command-title "Zadajte príkaz"

@@ -1587,11 +1587,8 @@
  :settings.general/theme-light "Licht"
  :settings.general/theme-system "Systeem"
 
- :settings.sync-server/clear-success "De URL van de synchronisatieserver is gewist. De officiële Logseq Sync wordt gebruikt."
- :settings.sync-server/reset "Standaard herstellen"
  :settings.sync-server/save-success "De URL van de synchronisatieserver is opgeslagen."
  :settings.sync-server/url "URL van de synchronisatieserver"
- :settings.sync-server/url-desc "Stel een aangepaste HTTPS-URL in voor een zelfgehoste synchronisatieserver. Je Logseq-authenticatietokens worden naar deze server gestuurd, dus gebruik alleen een vertrouwde URL. Laat dit leeg om de officiële Logseq Sync te gebruiken."
  :settings.sync-server/url-invalid-error "URL moet beginnen met https:// of http://"
 
  :shell/input-command-title "Opdracht invoeren"

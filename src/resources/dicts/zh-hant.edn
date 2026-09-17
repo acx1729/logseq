@@ -1600,11 +1600,8 @@
  :settings.general/theme-light "淺色模式"
  :settings.general/theme-system "跟隨系統"
 
- :settings.sync-server/clear-success "已清除同步伺服器 URL。將使用官方 Logseq Sync。"
- :settings.sync-server/reset "還原預設值"
  :settings.sync-server/save-success "已儲存同步伺服器 URL。"
  :settings.sync-server/url "同步伺服器 URL"
- :settings.sync-server/url-desc "為自架同步設定自訂 HTTPS 同步伺服器 URL。你的 Logseq 驗證權杖會傳送到此伺服器，因此只應使用可信任的 URL。留空則使用官方 Logseq Sync。"
  :settings.sync-server/url-invalid-error "URL 必須以 https:// 或 http:// 開頭"
 
  :shell/input-command-title "輸入指令"

@@ -1587,11 +1587,8 @@
  :settings.general/theme-light "Hell"
  :settings.general/theme-system "System"
 
- :settings.sync-server/clear-success "Die URL des Sync-Servers wurde gelöscht. Es wird der offizielle Logseq Sync verwendet."
- :settings.sync-server/reset "Auf Standard zurücksetzen"
  :settings.sync-server/save-success "Die URL des Sync-Servers wurde gespeichert."
  :settings.sync-server/url "URL des Sync-Servers"
- :settings.sync-server/url-desc "Legen Sie eine benutzerdefinierte HTTPS-URL für einen selbst gehosteten Sync-Server fest. Ihre Logseq-Authentifizierungstokens werden an diesen Server gesendet, daher sollten Sie nur eine vertrauenswürdige URL verwenden. Lassen Sie das Feld leer, um den offiziellen Logseq Sync zu verwenden."
  :settings.sync-server/url-invalid-error "URL muss mit https:// oder http:// beginnen"
 
  :shell/input-command-title "Befehl eingeben"

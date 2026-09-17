@@ -1587,11 +1587,8 @@
  :settings.general/theme-light "Clar"
  :settings.general/theme-system "Sistema"
 
- :settings.sync-server/clear-success "S'ha esborrat l'URL del servidor de sincronització. S'utilitzarà Logseq Sync oficial."
- :settings.sync-server/reset "Restablir per defecte"
  :settings.sync-server/save-success "S'ha desat l'URL del servidor de sincronització."
  :settings.sync-server/url "URL del servidor de sincronització"
- :settings.sync-server/url-desc "Defineix una URL HTTPS personalitzada per al servidor de sincronització autoallotjat. Els teus testimonis d'autenticació de Logseq s'enviaran a aquest servidor, així que fes servir només una URL de confiança. Deixa-ho buit per fer servir Logseq Sync oficial."
  :settings.sync-server/url-invalid-error "L'URL ha de començar per https:// o http://"
 
  :shell/input-command-title "Introdueix una ordre"

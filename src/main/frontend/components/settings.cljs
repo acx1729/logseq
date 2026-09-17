@@ -645,16 +645,35 @@
                             :ws-url (config/db-sync-ws-url)
                             :http-base (config/db-sync-http-base)}))
 
+(defn- suggested-sync-server-url
+  "On the web the app is usually served by the sync server itself, so its
+   origin is the likely address; desktop and mobile start blank."
+  []
+  (when-not (or (util/electron?) (mobile-util/native-platform?))
+    (.-origin js/location)))
+
 (hsx/defc sync-server-url-settings-container
   []
-  (let [current-url (config/get-custom-sync-server-url)
-        [url set-url!] (hooks/use-state (or current-url ""))
-        reset-url! (fn []
-                     (config/set-custom-sync-server-url! nil)
-                     (set-url! "")
-                     (-> (push-sync-config-to-worker!)
-                         (p/then #(notification/show! (t :settings.sync-server/clear-success) :success))
-                         (p/catch #(notification/show! (str "Failed to update worker: " %) :error))))]
+  (let [current-url (config/sync-server-url)
+        [url set-url!] (hooks/use-state (or current-url (suggested-sync-server-url) ""))
+        save! (fn []
+                (let [trimmed (string/trim url)]
+                  (if-not (config/valid-sync-server-url? trimmed)
+                    (notification/show! (t :settings.sync-server/url-invalid-error) :error)
+                    (do
+                      (config/set-sync-server-url! trimmed)
+                      (config/dismiss-sync-server-prompt!)
+                      (-> (push-sync-config-to-worker!)
+                          (p/then (fn [_]
+                                    (notification/show! (t :settings.sync-server/save-success) :success)
+                                    (shui/dialog-close! :sync-server-panel)))
+                          (p/catch #(notification/show! (str "Failed to update worker: " %) :error)))))))
+        clear! (fn []
+                 (config/set-sync-server-url! nil)
+                 (set-url! "")
+                 (-> (push-sync-config-to-worker!)
+                     (p/then #(notification/show! (t :settings.sync-server/clear-success) :success))
+                     (p/catch #(notification/show! (str "Failed to update worker: " %) :error))))]
     [:div.cp__settings-sync-server-cnt
      [:h1.mb-2.text-2xl.font-bold (t :settings.sync-server/url)]
      [:div.p-2
@@ -664,39 +683,32 @@
         [:strong "URL"]
         [:input.form-input.is-small
          {:value url
-          :placeholder config/default-db-sync-http-base
+          :placeholder "https://logseq.example.com"
           :style {:width "100%"}
-          :on-change #(set-url! (util/evalue %))}]]]
+          :on-change #(set-url! (util/evalue %))
+          :on-key-down (fn [^js e]
+                         (when (= "Enter" (.-key e))
+                           (save!)))}]]]
       [:p.pt-2.flex.gap-2
        (shui/button
         {:size :sm
-         :on-click (fn []
-                     (let [trimmed (string/trim url)]
-                       (if (string/blank? trimmed)
-                         (reset-url!)
-                         (if-not (config/valid-sync-server-url? trimmed)
-                           (notification/show! (t :settings.sync-server/url-invalid-error) :error)
-                           (do
-                             (config/set-custom-sync-server-url! trimmed)
-                             (-> (push-sync-config-to-worker!)
-                                 (p/then #(notification/show! (t :settings.sync-server/save-success) :success))
-                                 (p/catch #(notification/show! (str "Failed to update worker: " %) :error))))))))}
+         :on-click (fn [] (save!))}
         (t :ui/save))
-       (when (seq url)
+       (when (seq current-url)
          (shui/button
           {:size :sm
            :variant :outline
-           :on-click (fn [] (reset-url!))}
-          (t :settings.sync-server/reset)))]]]))
+           :on-click (fn [] (clear!))}
+          (t :settings.sync-server/clear)))]]]))
 
 (hsx/defc sync-server-url-button
   []
-  (let [current-url (config/get-custom-sync-server-url)]
+  (let [current-url (config/sync-server-url)]
     (ui/button [:span.flex.items-center
                 [:span.pr-1
                  (if (seq current-url)
                    current-url
-                   "Logseq Sync")]
+                   (t :settings.sync-server/not-configured))]
                 (ui/icon "edit")]
                :class "text-sm"
                :on-click #(state/pub-event! [:go/sync-server-settings]))))

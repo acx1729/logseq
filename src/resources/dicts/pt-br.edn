@@ -1587,11 +1587,8 @@
  :settings.general/theme-light "Claro"
  :settings.general/theme-system "Sistema"
 
- :settings.sync-server/clear-success "A URL do servidor de sincronização foi limpa. Usando o Logseq Sync oficial."
- :settings.sync-server/reset "Redefinir para o padrão"
  :settings.sync-server/save-success "URL do servidor de sincronização salva."
  :settings.sync-server/url "URL do servidor de sincronização"
- :settings.sync-server/url-desc "Defina uma URL HTTPS personalizada para um servidor de sincronização self-hosted. Seus tokens de autenticação do Logseq serão enviados para esse servidor, então use apenas uma URL confiável. Deixe em branco para usar o Logseq Sync oficial."
  :settings.sync-server/url-invalid-error "A URL deve começar com https:// ou http://"
 
  :shell/input-command-title "Inserir comando"

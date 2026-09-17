@@ -1600,11 +1600,8 @@
  :settings.general/theme-light "ライト"
  :settings.general/theme-system "システム"
 
- :settings.sync-server/clear-success "同期サーバー URL をクリアしました。公式の Logseq Sync を使用します。"
- :settings.sync-server/reset "デフォルトに戻す"
  :settings.sync-server/save-success "同期サーバー URL を保存しました。"
  :settings.sync-server/url "同期サーバー URL"
- :settings.sync-server/url-desc "セルフホスト同期用のカスタム HTTPS 同期サーバー URL を設定します。Logseq の認証トークンはこのサーバーに送信されるため、信頼できる URL のみを使用してください。空のままにすると、公式の Logseq Sync を使用します。"
  :settings.sync-server/url-invalid-error "URL は https:// または http:// で始まる必要があります"
 
  :shell/input-command-title "コマンド入力"

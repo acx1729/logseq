@@ -125,9 +125,10 @@ The final released binaries or installers will be at `static/out/`.
 
 ## DB sync
 
-DB sync runs against the self-hosted Node adapter in `deps/db-sync`. To use a
-local sync server, the app must be built with `$ENABLE_DB_SYNC_LOCAL`, e.g.
-`ENABLE_DB_SYNC_LOCAL=true pnpm watch`. For more about db sync, see
+DB sync runs against the self-hosted Node adapter in `deps/db-sync`. The app
+asks for the sync server address on its first start and keeps it in the
+browser profile; Settings > Sync server changes it later. For a local server
+enter `http://127.0.0.1:8787`. For more about db sync, see
 [its readme](/deps/db-sync/README.md).
 
 ### DB sync Node adapter (self-hosted)

@@ -282,9 +282,8 @@
        {:on-click #(state/pub-event! [:go/sync-server-settings])}
        [:span.text-base (t :settings.sync-server/url)]
        [:span.text-sm.opacity-70
-        (if-let [custom (config/get-custom-sync-server-url)]
-          custom
-          "Logseq Sync")]]
+        (or (config/sync-server-url)
+            (t :settings.sync-server/not-configured))]]
 
       (when login?
         [:div.mobile-setting-item

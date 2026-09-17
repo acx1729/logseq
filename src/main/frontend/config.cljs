@@ -35,35 +35,33 @@
 ;; Enable for local development
 ;; (def default-publish-api-base "http://localhost:8787")
 
-(goog-define ENABLE-DB-SYNC-LOCAL false)
-(defonce db-sync-local? ENABLE-DB-SYNC-LOCAL)
-
-(defonce default-db-sync-ws-url
-  (if db-sync-local?
-    "ws://127.0.0.1:8787/sync/%s"
-    "wss://api.logseq.io/sync/%s"))
-
-(defonce default-db-sync-http-base
-  (if db-sync-local?
-    "http://127.0.0.1:8787"
-    "https://api.logseq.io"))
-
-(defn get-custom-sync-server-url
-  "Read the user-configured custom sync server URL from localStorage.
-   Returns nil when not set or empty."
+(defn sync-server-url
+  "The self-hosted sync server this app talks to, kept in this browser
+   profile. nil until the person sets one."
   []
   (when-not util/node-test?
     (let [v (.getItem js/localStorage "sync-server-url")]
       (when (and (string? v) (not (string/blank? v)))
         v))))
 
-(defn set-custom-sync-server-url!
-  "Persist the custom sync server URL to localStorage. Pass nil or empty string to clear."
+(defn set-sync-server-url!
+  "Saves the sync server address; nil or blank clears it."
   [url]
   (when-not util/node-test?
     (if (or (nil? url) (string/blank? url))
       (.removeItem js/localStorage "sync-server-url")
       (.setItem js/localStorage "sync-server-url" (string/trim url)))))
+
+(defn sync-server-prompt-dismissed?
+  "True once the person closed the startup prompt without setting a server."
+  []
+  (when-not util/node-test?
+    (= "true" (.getItem js/localStorage "sync-server-prompt-dismissed"))))
+
+(defn dismiss-sync-server-prompt!
+  []
+  (when-not util/node-test?
+    (.setItem js/localStorage "sync-server-prompt-dismissed" "true")))
 
 (defn valid-sync-server-url?
   "Return true when `url` looks like a valid HTTP(S) base URL."
@@ -71,33 +69,29 @@
   (and (string? url)
        (re-find #"^https?://" url)))
 
-(defn custom-url->ws-url
-  "Derive a WebSocket sync URL from a custom HTTP base URL. Pure function."
-  [custom-url]
-  (let [scheme (if (string/starts-with? custom-url "https") "wss" "ws")
-        base (-> custom-url
+(defn sync-server-url->ws-url
+  "Derive a WebSocket sync URL from the server's HTTP base URL. Pure function."
+  [server-url]
+  (let [scheme (if (string/starts-with? server-url "https") "wss" "ws")
+        base (-> server-url
                  (string/replace #"^https?://" "")
                  (string/replace #"/+$" ""))]
     (str scheme "://" base "/sync/%s")))
 
-(defn custom-url->http-base
-  "Normalize a custom HTTP base URL by stripping trailing slashes. Pure function."
-  [custom-url]
-  (string/replace custom-url #"/+$" ""))
+(defn sync-server-url->http-base
+  "Normalize the server's HTTP base URL by stripping trailing slashes. Pure function."
+  [server-url]
+  (string/replace server-url #"/+$" ""))
 
 (defn db-sync-ws-url
-  "Return the WebSocket sync URL. Uses custom server when configured, otherwise the default."
+  "The WebSocket sync URL, or nil while no sync server is set."
   []
-  (if-let [custom (get-custom-sync-server-url)]
-    (custom-url->ws-url custom)
-    default-db-sync-ws-url))
+  (some-> (sync-server-url) sync-server-url->ws-url))
 
 (defn db-sync-http-base
-  "Return the HTTP base URL for sync. Uses custom server when configured, otherwise the default."
+  "The HTTP base URL of the sync server, or nil while none is set."
   []
-  (if-let [custom (get-custom-sync-server-url)]
-    (custom-url->http-base custom)
-    default-db-sync-http-base))
+  (some-> (sync-server-url) sync-server-url->http-base))
 
 (defn get-custom-publish-server-url
   "Read the user-configured custom publish server URL from localStorage.

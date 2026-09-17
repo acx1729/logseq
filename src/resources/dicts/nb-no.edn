@@ -1587,11 +1587,8 @@
  :settings.general/theme-light "Lys"
  :settings.general/theme-system "System"
 
- :settings.sync-server/clear-success "URL-en til synkroniseringsserveren ble fjernet. Offisiell Logseq Sync brukes."
- :settings.sync-server/reset "Tilbakestill til standard"
  :settings.sync-server/save-success "URL-en til synkroniseringsserveren ble lagret."
  :settings.sync-server/url "URL til synkroniseringsserver"
- :settings.sync-server/url-desc "Angi en egendefinert HTTPS-URL for en selvhostet synkroniseringsserver. Logseq-autentiseringstokenene dine sendes til denne serveren, så bruk bare en pålitelig URL. La feltet være tomt for å bruke offisiell Logseq Sync."
  :settings.sync-server/url-invalid-error "URL må starte med https:// eller http://"
 
  :shell/input-command-title "Skriv inn kommando"

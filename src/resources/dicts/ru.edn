@@ -1587,11 +1587,8 @@
  :settings.general/theme-light "Светлая"
  :settings.general/theme-system "Системная"
 
- :settings.sync-server/clear-success "URL сервера синхронизации очищен. Будет использован официальный Logseq Sync."
- :settings.sync-server/reset "Сбросить по умолчанию"
  :settings.sync-server/save-success "URL сервера синхронизации сохранён."
  :settings.sync-server/url "URL сервера синхронизации"
- :settings.sync-server/url-desc "Укажите пользовательский HTTPS URL сервера синхронизации для self-hosted режима. Ваши токены аутентификации Logseq будут отправляться на этот сервер, поэтому используйте только доверенный URL. Оставьте поле пустым, чтобы использовать официальный Logseq Sync."
  :settings.sync-server/url-invalid-error "URL должен начинаться с https:// или http://"
 
  :shell/input-command-title "Введите команду"

@@ -105,6 +105,17 @@
    (settings/sync-server-url-settings-container)
    {:id :sync-server-panel :center? true :class "lg:max-w-2xl"}))
 
+(defevent! :sync-server/prompt [[_]]
+  ;; First start without a sync server: ask for its address once. Closing the
+  ;; dialog without saving keeps the app offline until Settings sets one.
+  (shui/dialog-open!
+   (settings/sync-server-url-settings-container)
+   {:id :sync-server-panel
+    :center? true
+    :class "lg:max-w-2xl"
+    :on-close (fn [_id]
+                (config/dismiss-sync-server-prompt!))}))
+
 (defevent! :go/publish-server-settings [[_]]
   (shui/dialog-open!
    (settings/publish-server-url-settings-container)

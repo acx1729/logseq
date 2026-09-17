@@ -1587,11 +1587,8 @@
  :settings.general/theme-light "라이트"
  :settings.general/theme-system "시스템"
 
- :settings.sync-server/clear-success "동기화 서버 URL을 지웠습니다. 공식 Logseq Sync를 사용합니다."
- :settings.sync-server/reset "기본값으로 복원"
  :settings.sync-server/save-success "동기화 서버 URL을 저장했습니다."
  :settings.sync-server/url "동기화 서버 URL"
- :settings.sync-server/url-desc "셀프 호스팅 동기화를 위해 사용자 지정 HTTPS 동기화 서버 URL을 설정합니다. Logseq 인증 토큰이 이 서버로 전송되므로 신뢰할 수 있는 URL만 사용하세요. 비워 두면 공식 Logseq Sync를 사용합니다."
  :settings.sync-server/url-invalid-error "URL은 https:// 또는 http://로 시작해야 합니다"
 
  :shell/input-command-title "명령어 입력"

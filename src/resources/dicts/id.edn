@@ -1587,11 +1587,8 @@
  :settings.general/theme-light "terang"
  :settings.general/theme-system "sistem"
 
- :settings.sync-server/clear-success "URL server sinkronisasi dihapus. Menggunakan Logseq Sync resmi."
- :settings.sync-server/reset "Reset ke default"
  :settings.sync-server/save-success "URL server sinkronisasi disimpan."
  :settings.sync-server/url "URL Server Sinkronisasi"
- :settings.sync-server/url-desc "Tetapkan URL server sinkronisasi HTTPS kustom untuk sinkronisasi self-hosted. Token autentikasi Logseq Anda akan dikirim ke server ini, jadi gunakan hanya URL yang tepercaya. Biarkan kosong untuk menggunakan Logseq Sync resmi."
  :settings.sync-server/url-invalid-error "URL harus diawali dengan https:// atau http://"
 
  :shell/input-command-title "Masukkan perintah"

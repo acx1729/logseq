@@ -1742,11 +1742,12 @@
  :settings.general/theme-light "light"
  :settings.general/theme-system "system"
 
- :settings.sync-server/clear-success "Sync server URL cleared. Using official Logseq Sync."
- :settings.sync-server/reset "Reset to default"
+ :settings.sync-server/clear "Clear"
+ :settings.sync-server/clear-success "Sync server cleared. Sync stays off until you set one."
+ :settings.sync-server/not-configured "Not configured"
  :settings.sync-server/save-success "Sync server URL saved."
- :settings.sync-server/url "Sync Server URL"
- :settings.sync-server/url-desc "Set a custom HTTPS sync server URL for self-hosted sync. Your Logseq authentication tokens will be sent to this server, so only use a trusted URL. Leave empty to use the official Logseq Sync."
+ :settings.sync-server/url "Sync server"
+ :settings.sync-server/url-desc "The address of your self-hosted Logseq sync server, for example https://logseq.example.com. Your sign-in tokens are sent only to this server. Leave it empty to work offline."
  :settings.sync-server/url-invalid-error "URL must start with https:// or http://"
 
  :settings-page/publish-server-url "Publish Server URL"

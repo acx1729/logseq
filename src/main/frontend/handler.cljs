@@ -189,7 +189,10 @@
                          (repo-handler/new-db! config/demo-repo)
                          (restore-and-setup! repo))
                      _ (when target-repo
-                         (apply-url-target-route! url-target))]
+                         (apply-url-target-route! url-target))
+                     _ (when-not (or (config/sync-server-url)
+                                     (config/sync-server-prompt-dismissed?))
+                         (state/pub-event! [:sync-server/prompt]))]
                (set-network-watcher!)
                (when (mobile-util/native-platform?)
                  (state/restore-mobile-theme!)))))

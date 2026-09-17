@@ -1587,11 +1587,8 @@
  :settings.general/theme-light "Lig"
  :settings.general/theme-system "Stelsel"
 
- :settings.sync-server/clear-success "Sinkronisasiebediener-URL uitgevee. Gebruik amptelike Logseq Sync."
- :settings.sync-server/reset "Verstek herstellen"
  :settings.sync-server/save-success "Sinkronisasiebediener-URL gestoor."
  :settings.sync-server/url "Sinkronisasiebediener-URL"
- :settings.sync-server/url-desc "Stel 'n pasgemaakte HTTPS-sinkronisasiebediener-URL vir self-gehoste sinkronisasie. Jou Logseq-verifikasietokens sal na hierdie bediener gestuur word, gebruik dus slegs 'n betroubare URL. Laat dit leeg om die amptelike Logseq Sync te gebruik."
  :settings.sync-server/url-invalid-error "URL moet met https:// of http:// begin"
 
  :shell/input-command-title "Voer opdrag in"

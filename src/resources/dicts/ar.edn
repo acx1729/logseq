@@ -1587,11 +1587,8 @@
  :settings.general/theme-light "فاتح"
  :settings.general/theme-system "النظام"
 
- :settings.sync-server/clear-success "تم مسح URL خادم المزامنة. سيتم استخدام Logseq Sync الرسمي."
- :settings.sync-server/reset "إعادة التعيين للافتراضي"
  :settings.sync-server/save-success "تم حفظ URL خادم المزامنة."
  :settings.sync-server/url "URL خادم المزامنة"
- :settings.sync-server/url-desc "عيّن URL مخصصًا لخادم مزامنة HTTPS للمزامنة المستضافة ذاتيًا. سيتم إرسال رموز مصادقة Logseq الخاصة بك إلى هذا الخادم، لذا استخدم URL موثوقًا فقط. اتركه فارغًا لاستخدام Logseq Sync الرسمي."
  :settings.sync-server/url-invalid-error "يجب أن يبدأ URL بـ https:// أو http://"
 
  :shell/input-command-title "إدخال الأمر"

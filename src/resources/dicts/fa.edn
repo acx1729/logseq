@@ -1587,11 +1587,8 @@
  :settings.general/theme-light "روشن"
  :settings.general/theme-system "سیستم"
 
- :settings.sync-server/clear-success "URL سرور همگام‌سازی پاک شد. از Logseq Sync رسمی استفاده می‌شود."
- :settings.sync-server/reset "بازنشانی به پیش‌فرض"
  :settings.sync-server/save-success "URL سرور همگام‌سازی ذخیره شد."
  :settings.sync-server/url "URL سرور همگام‌سازی"
- :settings.sync-server/url-desc "برای همگام‌سازی خودمیزبان، یک URL سفارشی HTTPS برای سرور همگام‌سازی تنظیم کنید. توکن‌های احراز هویت Logseq شما به این سرور ارسال می‌شوند، پس فقط از URL قابل اعتماد استفاده کنید. برای استفاده از Logseq Sync رسمی، این بخش را خالی بگذارید."
  :settings.sync-server/url-invalid-error "URL باید با https:// یا http:// شروع شود"
 
  :shell/input-command-title "ورود دستور"

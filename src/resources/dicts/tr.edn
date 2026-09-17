@@ -1587,11 +1587,8 @@
  :settings.general/theme-light "Açık"
  :settings.general/theme-system "Sistem"
 
- :settings.sync-server/clear-success "Senkronizasyon sunucusu URL'si temizlendi. Resmî Logseq Sync kullanılacak."
- :settings.sync-server/reset "Varsayılana sıfırla"
  :settings.sync-server/save-success "Senkronizasyon sunucusu URL'si kaydedildi."
  :settings.sync-server/url "Senkronizasyon sunucusu URL'si"
- :settings.sync-server/url-desc "Self-hosted senkronizasyon için özel bir HTTPS senkronizasyon sunucusu URL'si ayarlayın. Logseq kimlik doğrulama belirteçleriniz bu sunucuya gönderileceğinden yalnızca güvenilir bir URL kullanın. Resmî Logseq Sync'i kullanmak için boş bırakın."
  :settings.sync-server/url-invalid-error "URL https:// veya http:// ile başlamalıdır"
 
  :shell/input-command-title "Komut girin"
