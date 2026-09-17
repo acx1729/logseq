@@ -152,14 +152,12 @@
 
 (def graphs-list-response-schema
   [:map
-   [:graphs [:sequential graph-info-schema]]
-   [:user-rsa-keys-exists? {:optional true} :boolean]])
+   [:graphs [:sequential graph-info-schema]]])
 
 (def graph-create-request-schema
   [:map
    [:graph-name :string]
    [:schema-version {:optional true} [:maybe :string]]
-   [:graph-e2ee? {:optional true} :boolean]
    [:graph-ready-for-use? {:optional true} :boolean]])
 
 (def graph-create-response-schema
@@ -194,42 +192,10 @@
    [:t-before :int]
    [:txs [:sequential tx-entry-schema]]])
 
-(def e2ee-user-key-request-schema
+(def graph-key-response-schema
+  "The graph's AES-256 key, base64, for members of the graph."
   [:map
-   [:public-key :string]
-   [:encrypted-private-key :string]
-   [:reset-private-key {:optional true} :boolean]])
-
-(def e2ee-user-key-response-schema
-  [:map
-   [:public-key {:optional true} [:maybe :string]]
-   [:encrypted-private-key {:optional true} [:maybe :string]]])
-
-(def e2ee-user-public-key-response-schema
-  [:map
-   [:public-key {:optional true} [:maybe :string]]])
-
-(def e2ee-graph-aes-key-request-schema
-  [:map
-   [:encrypted-aes-key :string]])
-
-(def e2ee-graph-aes-key-response-schema
-  [:map
-   [:encrypted-aes-key {:optional true} [:maybe :string]]])
-
-(def e2ee-grant-access-entry-schema
-  [:map
-   [:email :string]
-   [:encrypted-aes-key :string]])
-
-(def e2ee-grant-access-request-schema
-  [:map
-   [:target-user-email+encrypted-aes-key-coll [:sequential e2ee-grant-access-entry-schema]]])
-
-(def e2ee-grant-access-response-schema
-  [:map
-   [:ok :boolean]
-   [:missing-users {:optional true} [:sequential :string]]])
+   [:key :string]])
 
 (def snapshot-download-response-schema
   [:map
@@ -252,16 +218,14 @@
   {:graphs/create graph-create-request-schema
    :graph-members/create graph-member-create-request-schema
    :graph-members/update graph-member-update-request-schema
-   :sync/tx-batch tx-batch-request-schema
-   :e2ee/user-keys e2ee-user-key-request-schema
-   :e2ee/graph-aes-key e2ee-graph-aes-key-request-schema
-   :e2ee/grant-access e2ee-grant-access-request-schema})
+   :sync/tx-batch tx-batch-request-schema})
 
 (def http-response-schemas
   {:graphs/list graphs-list-response-schema
    :graphs/create graph-create-response-schema
    :graphs/access graph-access-response-schema
    :graphs/delete graph-delete-response-schema
+   :graphs/key graph-key-response-schema
    :graph-members/list graph-members-list-response-schema
    :graph-members/create http-ok-response-schema
    :graph-members/update http-ok-response-schema
@@ -273,10 +237,6 @@
    :sync/snapshot-download snapshot-download-response-schema
    :sync/snapshot-upload snapshot-upload-response-schema
    :sync/admin-reset http-ok-response-schema
-   :e2ee/user-keys e2ee-user-key-response-schema
-   :e2ee/user-public-key e2ee-user-public-key-response-schema
-   :e2ee/graph-aes-key e2ee-graph-aes-key-response-schema
-   :e2ee/grant-access e2ee-grant-access-response-schema
    :assets/get asset-get-response-schema
    :assets/put http-ok-response-schema
    :assets/delete http-ok-response-schema

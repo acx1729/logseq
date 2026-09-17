@@ -1,5 +1,6 @@
 (ns logseq.db-sync.node.config
-  (:require [clojure.string :as string]))
+  (:require ["path" :as node-path]
+            [clojure.string :as string]))
 
 (defn- env-value [^js env k]
   (let [v (aget env k)]
@@ -45,9 +46,13 @@
       :token-ttl-s (when-let [v (env-value env "DB_SYNC_TOKEN_TTL_S")] (parse-int v nil))
       :token-signer (env-value env "DB_SYNC_TOKEN_SIGNER")
       :token-signing-key-file (env-value env "DB_SYNC_TOKEN_SIGNING_KEY_FILE")
+      :key-store (env-value env "DB_SYNC_KEY_STORE")
+      :key-store-dir (env-value env "DB_SYNC_KEY_STORE_DIR")
       :bao-addr (env-value env "BAO_ADDR")
       :bao-transit-mount (env-value env "BAO_TRANSIT_MOUNT")
       :bao-transit-key (env-value env "BAO_TRANSIT_KEY")
+      :bao-kv-mount (env-value env "BAO_KV_MOUNT")
+      :bao-kv-prefix (env-value env "BAO_KV_PREFIX")
       :bao-token (env-value env "BAO_TOKEN")
       :bao-role-id (env-value env "BAO_ROLE_ID")
       :bao-secret-id (env-value env "BAO_SECRET_ID")
@@ -61,7 +66,9 @@
 (def ^:private allowed-config-keys
   [:port :base-url :data-dir :storage-driver :assets-driver :log-level :admin-token :trust-proxy?
    :token-issuer :token-audience :token-ttl-s :token-signer :token-signing-key-file
-   :bao-addr :bao-transit-mount :bao-transit-key :bao-token :bao-role-id :bao-secret-id :bao-secret-id-file
+   :key-store :key-store-dir
+   :bao-addr :bao-transit-mount :bao-transit-key :bao-kv-mount :bao-kv-prefix
+   :bao-token :bao-role-id :bao-secret-id :bao-secret-id-file
    :siwe-domains :siwe-chain-ids :siwe-redirect-uris :siwe-statement :app-name])
 
 (defn- fail! [message]
@@ -70,9 +77,20 @@
 (defn- missing? [v]
   (or (nil? v) (and (string? v) (string/blank? v))))
 
+(defn- validate-bao-auth!
+  "OpenBao address and credentials, shared by the Transit signer and the KV
+  key store; `setting` names the option that asked for them."
+  [{:keys [bao-addr bao-token bao-role-id bao-secret-id bao-secret-id-file]} setting]
+  (when (missing? bao-addr)
+    (fail! (str "BAO_ADDR is required when " setting)))
+  (when-not (or (not (missing? bao-token))
+                (and (not (missing? bao-role-id))
+                     (or (not (missing? bao-secret-id))
+                         (not (missing? bao-secret-id-file)))))
+    (fail! "OpenBao auth needs BAO_TOKEN, or BAO_ROLE_ID with BAO_SECRET_ID or BAO_SECRET_ID_FILE")))
+
 (defn- validate-signer!
-  [{:keys [token-signer token-signing-key-file bao-addr bao-transit-key
-           bao-token bao-role-id bao-secret-id bao-secret-id-file]}]
+  [{:keys [token-signer token-signing-key-file bao-transit-key] :as cfg}]
   (case token-signer
     "file"
     (when (missing? token-signing-key-file)
@@ -80,17 +98,27 @@
 
     "transit"
     (do
-      (when (missing? bao-addr)
-        (fail! "BAO_ADDR is required when DB_SYNC_TOKEN_SIGNER=transit"))
+      (validate-bao-auth! cfg "DB_SYNC_TOKEN_SIGNER=transit")
       (when (missing? bao-transit-key)
-        (fail! "BAO_TRANSIT_KEY is required when DB_SYNC_TOKEN_SIGNER=transit"))
-      (when-not (or (not (missing? bao-token))
-                    (and (not (missing? bao-role-id))
-                         (or (not (missing? bao-secret-id))
-                             (not (missing? bao-secret-id-file)))))
-        (fail! "OpenBao auth needs BAO_TOKEN, or BAO_ROLE_ID with BAO_SECRET_ID or BAO_SECRET_ID_FILE")))
+        (fail! "BAO_TRANSIT_KEY is required when DB_SYNC_TOKEN_SIGNER=transit")))
 
     (fail! (str "DB_SYNC_TOKEN_SIGNER must be file or transit, got: " (pr-str token-signer)))))
+
+(defn- validate-key-store!
+  [{:keys [key-store bao-kv-mount bao-kv-prefix] :as cfg}]
+  (case key-store
+    "file"
+    nil
+
+    "openbao"
+    (do
+      (validate-bao-auth! cfg "DB_SYNC_KEY_STORE=openbao")
+      (when (missing? bao-kv-mount)
+        (fail! "BAO_KV_MOUNT is required when DB_SYNC_KEY_STORE=openbao"))
+      (when (missing? bao-kv-prefix)
+        (fail! "BAO_KV_PREFIX is required when DB_SYNC_KEY_STORE=openbao")))
+
+    (fail! (str "DB_SYNC_KEY_STORE must be file or openbao, got: " (pr-str key-store)))))
 
 (defn- parse-chain-ids [chain-ids]
   (let [parsed (mapv (fn [v] (parse-int v nil)) chain-ids)]
@@ -109,6 +137,8 @@
                   :token-ttl-s (* 30 24 60 60)
                   :bao-transit-mount "transit"
                   :bao-transit-key "logseq-token"
+                  :bao-kv-mount "logseq"
+                  :bao-kv-prefix "graphs"
                   :siwe-chain-ids []
                   :siwe-redirect-uris default-siwe-redirect-uris
                   :siwe-statement "Sign in to Logseq"
@@ -117,10 +147,15 @@
         storage-driver (string/lower-case (:storage-driver merged))
         assets-driver (string/lower-case (:assets-driver merged))
         token-signer (some-> (:token-signer merged) string/lower-case)
+        key-store (some-> (:key-store merged) string/lower-case)
         merged (assoc merged
                       :storage-driver storage-driver
                       :assets-driver assets-driver
                       :token-signer token-signer
+                      :key-store key-store
+                      :key-store-dir (if (missing? (:key-store-dir merged))
+                                       (node-path/join (:data-dir merged) "keys")
+                                       (:key-store-dir merged))
                       :siwe-chain-ids (parse-chain-ids (:siwe-chain-ids merged)))]
     (when-not (#{"sqlite"} storage-driver)
       (fail! (str "unsupported storage driver: " storage-driver)))
@@ -138,4 +173,5 @@
     (when (empty? (:siwe-redirect-uris merged))
       (fail! "DB_SYNC_SIWE_REDIRECT_URIS must list at least one callback"))
     (validate-signer! merged)
+    (validate-key-store! merged)
     (select-keys merged allowed-config-keys)))

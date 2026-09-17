@@ -25,28 +25,20 @@
       (is (= :graphs/delete (:handler match)))
       (is (= "graph-5" (get-in match [:path-params :graph-id]))))))
 
-(deftest match-route-e2ee-test
-  (testing "e2ee routes"
-    (let [match (routes/match-route "GET" "/e2ee/user-keys")]
-      (is (= :e2ee/user-keys-get (:handler match))))
-    (let [match (routes/match-route "POST" "/e2ee/user-keys")]
-      (is (= :e2ee/user-keys-post (:handler match))))
-    (let [match (routes/match-route "GET" "/e2ee/user-public-key")]
-      (is (= :e2ee/user-public-key-get (:handler match))))
-    (let [match (routes/match-route "GET" "/e2ee/graphs/graph-7/aes-key")]
-      (is (= :e2ee/graph-aes-key-get (:handler match)))
-      (is (= "graph-7" (get-in match [:path-params :graph-id]))))
-    (let [match (routes/match-route "POST" "/e2ee/graphs/graph-8/aes-key")]
-      (is (= :e2ee/graph-aes-key-post (:handler match)))
-      (is (= "graph-8" (get-in match [:path-params :graph-id]))))
-    (let [match (routes/match-route "POST" "/e2ee/graphs/graph-9/grant-access")]
-      (is (= :e2ee/grant-access (:handler match)))
-      (is (= "graph-9" (get-in match [:path-params :graph-id]))))))
+(deftest match-route-graph-key-test
+  (testing "graph key route"
+    (let [match (routes/match-route "GET" "/graphs/graph-7/key")]
+      (is (= :graphs/key (:handler match)))
+      (is (= "graph-7" (get-in match [:path-params :graph-id])))))
+  (testing "the key exchange routes are gone"
+    (is (nil? (routes/match-route "GET" "/e2ee/user-keys")))
+    (is (nil? (routes/match-route "GET" "/e2ee/graphs/graph-7/aes-key")))
+    (is (nil? (routes/match-route "POST" "/e2ee/graphs/graph-9/grant-access")))))
 
 (deftest match-route-method-mismatch-test
   (testing "method mismatch returns nil"
     (is (nil? (routes/match-route "GET" "/graphs/graph-1/members/user-9")))
-    (is (nil? (routes/match-route "PUT" "/e2ee/user-keys")))))
+    (is (nil? (routes/match-route "POST" "/graphs/graph-1/key")))))
 
 (deftest semantic-internal-routes-ignore-public-only-operations-test
   (is (nil? (semantic-routes/match-internal "GET" "/api/v1/graphs")))

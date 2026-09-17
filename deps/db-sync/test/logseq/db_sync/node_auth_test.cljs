@@ -203,24 +203,31 @@
                      created (<fetch-json base-url "/graphs" manager-token
                                           {:method "POST"
                                            :body (js/JSON.stringify #js {"graph-name" "shared"
-                                                                         "schema-version" "65"
-                                                                         "graph-e2ee?" false})})
+                                                                         "schema-version" "65"})})
                      graph-id (aget (:body created) "graph-id")
                      added (<fetch-json base-url (str "/graphs/" graph-id "/members") manager-token
                                         {:method "POST"
                                          :body (js/JSON.stringify #js {"user-id" member-id
                                                                        "role" "member"})})
                      member-access (<fetch-json base-url (str "/graphs/" graph-id "/access") member-token)
+                     member-key (<fetch-json base-url (str "/graphs/" graph-id "/key") member-token)
+                     manager-key (<fetch-json base-url (str "/graphs/" graph-id "/key") manager-token)
                      socket (<open-socket (str "ws://127.0.0.1:" port "/sync/" graph-id "?token=" member-token))
                      close-code (<close-code socket)
                      removed (<fetch-json base-url (str "/graphs/" graph-id "/members/" member-id) manager-token
                                           {:method "DELETE"})
                      code close-code
-                     member-access-after (<fetch-json base-url (str "/graphs/" graph-id "/access") member-token)]
+                     member-access-after (<fetch-json base-url (str "/graphs/" graph-id "/access") member-token)
+                     member-key-after (<fetch-json base-url (str "/graphs/" graph-id "/key") member-token)]
                (is (= 200 (:status created)))
+               (is (true? (aget (:body created) "graph-e2ee?")))
+               (is (= 200 (:status member-key)))
+               (is (= 32 (.-length (js/Buffer.from (aget (:body member-key) "key") "base64"))))
+               (is (= (aget (:body manager-key) "key") (aget (:body member-key) "key")))
                (is (= 200 (:status added)))
                (is (= 200 (:status member-access)))
                (is (= 200 (:status removed)))
                (is (= 4003 code))
-               (is (= 403 (:status member-access-after)))))
+               (is (= 403 (:status member-access-after)))
+               (is (= 403 (:status member-key-after)))))
            done)))

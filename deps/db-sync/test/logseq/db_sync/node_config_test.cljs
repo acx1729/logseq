@@ -6,6 +6,7 @@
   {:token-issuer "http://localhost:8787"
    :token-signer "file"
    :token-signing-key-file "tmp/unused-signing-key.pem"
+   :key-store "file"
    :siwe-domains ["localhost:8787"]})
 
 (defn- normalize [overrides]
@@ -48,7 +49,36 @@
     (is (= "Logseq" (:app-name cfg)))
     (is (false? (:trust-proxy? cfg)))
     (is (= "transit" (:bao-transit-mount cfg)))
-    (is (= "logseq-token" (:bao-transit-key cfg)))))
+    (is (= "logseq-token" (:bao-transit-key cfg)))
+    (is (= "logseq" (:bao-kv-mount cfg)))
+    (is (= "graphs" (:bao-kv-prefix cfg)))
+    (is (= "data/db-sync/keys" (:key-store-dir cfg)))))
+
+(deftest normalize-config-validates-key-store-test
+  (testing "file store keeps its directory under the data directory"
+    (is (= "tmp/data/keys" (:key-store-dir (normalize {:data-dir "tmp/data"}))))
+    (is (= "/run/keys" (:key-store-dir (normalize {:key-store-dir "/run/keys"})))))
+  (testing "openbao store needs an address, credentials, mount and prefix"
+    (is (re-find #"BAO_ADDR" (failure-message #(normalize {:key-store "openbao"}))))
+    (is (re-find #"BAO_TOKEN" (failure-message #(normalize {:key-store "openbao"
+                                                            :bao-addr "https://bao.example.test"}))))
+    (is (re-find #"BAO_KV_MOUNT" (failure-message #(normalize {:key-store "openbao"
+                                                               :bao-addr "https://bao.example.test"
+                                                               :bao-token "root"
+                                                               :bao-kv-mount " "}))))
+    (is (re-find #"BAO_KV_PREFIX" (failure-message #(normalize {:key-store "openbao"
+                                                                :bao-addr "https://bao.example.test"
+                                                                :bao-token "root"
+                                                                :bao-kv-prefix " "}))))
+    (let [cfg (normalize {:key-store "OPENBAO"
+                          :bao-addr "https://bao.example.test"
+                          :bao-role-id "role"
+                          :bao-secret-id "secret"})]
+      (is (= "openbao" (:key-store cfg)))
+      (is (= "logseq" (:bao-kv-mount cfg)))))
+  (testing "unknown store is refused"
+    (is (re-find #"DB_SYNC_KEY_STORE" (failure-message #(normalize {:key-store "vault"}))))
+    (is (re-find #"DB_SYNC_KEY_STORE" (failure-message #(normalize {:key-store nil}))))))
 
 (deftest normalize-config-requires-issuer-and-domains-test
   (is (re-find #"DB_SYNC_TOKEN_ISSUER" (failure-message #(normalize {:token-issuer nil}))))

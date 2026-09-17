@@ -1,6 +1,6 @@
 (ns logseq.db-sync.test-server
   "Configuration for starting the Node adapter in tests: a throwaway signing
-  key on disk and a local issuer, so no OpenBao is needed."
+  key on disk, graph keys as files and a local issuer, so no OpenBao is needed."
   (:require ["node:crypto" :as crypto]
             ["node:fs" :as fs]
             [logseq.db-sync.node.server :as node-server]))
@@ -23,6 +23,7 @@
              :token-issuer "http://127.0.0.1"
              :token-signer "file"
              :token-signing-key-file (write-signing-key! dir)
+             :key-store "file"
              :siwe-domains ["localhost" "127.0.0.1"]}
             extra))))
 

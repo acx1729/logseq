@@ -6,13 +6,7 @@
   {:graphs/create {:graph-name "Demo"}
    :graph-members/create {:email "user@example.com"}
    :graph-members/update {:role "member"}
-   :sync/tx-batch {:t-before 0 :txs []}
-   :e2ee/user-keys {:public-key "public"
-                    :encrypted-private-key "private"}
-   :e2ee/graph-aes-key {:encrypted-aes-key "aes"}
-   :e2ee/grant-access {:target-user-email+encrypted-aes-key-coll
-                       [{:email "user@example.com"
-                         :encrypted-aes-key "aes"}]}})
+   :sync/tx-batch {:t-before 0 :txs []}})
 
 (defn- coerce-request
   [schema-key body]

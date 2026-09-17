@@ -87,6 +87,27 @@ Authorization is unchanged: the graph owner and the rows in `graph_members`
 decide who may read and write a graph. Removing a member closes that member's
 open sockets on the graph and drops cached access decisions immediately.
 
+## Graph keys
+
+Every graph is encrypted by its members with one AES-256 key. This server
+generates the key when the graph is created and hands it to members over
+`GET /graphs/:graph-id/key`, which answers `{"key": "<base64>"}` to members
+and 403 to everyone else. The key never enters the index database. Two stores
+exist:
+
+- `DB_SYNC_KEY_STORE=file`: one file per graph under `DB_SYNC_KEY_STORE_DIR`
+  (default `<data dir>/keys`, created with mode 0600), for development and CI.
+- `DB_SYNC_KEY_STORE=openbao`: an OpenBao KV v2 mount (`BAO_KV_MOUNT`, default
+  `logseq`) with one secret per graph under `BAO_KV_PREFIX` (default `graphs`),
+  written with check-and-set version 0 so a key is never overwritten. The
+  transit signer and the key store share one OpenBao session and the same
+  `BAO_*` credentials. The policy needs `create` and `read` on
+  `<mount>/data/<prefix>/*` and `delete` on `<mount>/metadata/<prefix>/*`.
+
+Creating a graph writes the key first and answers 503 with no rows written
+when the store is unavailable; deleting a graph removes the key last, after
+its rows and storage. Removing a member does not rotate the key.
+
 ## Environment variables
 
 | Variable | Purpose |
@@ -103,9 +124,13 @@ open sockets on the graph and drops cached access decisions immediately.
 | DB_SYNC_TOKEN_TTL_S | Token lifetime in seconds (default 2592000) |
 | DB_SYNC_TOKEN_SIGNER | Required. `file` or `transit` |
 | DB_SYNC_TOKEN_SIGNING_KEY_FILE | PEM private key for the file signer |
-| BAO_ADDR | OpenBao address for the transit signer |
+| DB_SYNC_KEY_STORE | Required. `file` or `openbao` |
+| DB_SYNC_KEY_STORE_DIR | Directory of the file key store (default `<data dir>/keys`) |
+| BAO_ADDR | OpenBao address for the transit signer and the KV key store |
 | BAO_TRANSIT_MOUNT | Transit mount (default `transit`) |
 | BAO_TRANSIT_KEY | Transit key name (default `logseq-token`) |
+| BAO_KV_MOUNT | KV v2 mount of the graph keys (default `logseq`) |
+| BAO_KV_PREFIX | Path prefix of the graph keys in that mount (default `graphs`) |
 | BAO_TOKEN | Static OpenBao token (development only) |
 | BAO_ROLE_ID, BAO_SECRET_ID, BAO_SECRET_ID_FILE | AppRole credentials |
 | DB_SYNC_SIWE_DOMAINS | Required. Comma-separated authorities (host[:port]) sign-in messages may name |
@@ -119,9 +144,11 @@ open sockets on the graph and drops cached access decisions immediately.
 
 The index database is created through versioned migrations recorded in
 `schema_migrations`: the base entries in `logseq.db-sync.index/index-migrations`
-and the auth tables in `worker/auth/store.js`. Add a new entry for every schema
+and the auth tables in `worker/auth/store.js`, applied in id order, so a
+migration's numeric prefix is its position. Add a new entry for every schema
 change and keep the DDL portable (no `pragma`, `autoincrement`, `json_each` or
-`insert or replace`).
+`insert or replace`). `0003-drop-key-tables` removed the per-user key exchange
+tables of earlier builds; graph keys live in the key store above.
 
 ## Tests
 

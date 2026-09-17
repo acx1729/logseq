@@ -144,7 +144,8 @@ pnpm build:node-adapter
 ```
 
 `start.sh` listens on `DB_SYNC_PORT` (default 8787), signs tokens with
-`data/db-sync/signing-key.pem` and accepts sign-ins from `localhost:3001`,
+`data/db-sync/signing-key.pem`, keeps graph keys as files under
+`data/db-sync/keys` and accepts sign-ins from `localhost:3001`,
 `127.0.0.1:3001` and the server's own host. Override any `DB_SYNC_*` variable
 before running it; the full list is in the readme.
 
@@ -158,4 +159,5 @@ Notes:
 - Every token is minted by the server after a wallet signature; there is no
   identity provider to configure.
 - Production deployments sign tokens through OpenBao Transit
-  (`DB_SYNC_TOKEN_SIGNER=transit`) instead of a key file.
+  (`DB_SYNC_TOKEN_SIGNER=transit`) and keep graph keys in OpenBao KV
+  (`DB_SYNC_KEY_STORE=openbao`) instead of files.

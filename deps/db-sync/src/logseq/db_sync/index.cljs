@@ -38,10 +38,6 @@
     (or (= 0 v) (= "0" v)) false
     :else (true? v)))
 
-(defn- graph-e2ee-bool->sql
-  [v]
-  (if (false? v) 0 1))
-
 (defn- graph-ready-for-use-sql->bool
   [v]
   (cond
@@ -123,7 +119,11 @@
      "create index if not exists idx_graph_members_graph_id_created_at on graph_members (graph_id, created_at)"
      "create index if not exists idx_graphs_user_id_updated_at on graphs (user_id, updated_at desc)"
      "create index if not exists idx_users_email on users (email)"
-     daily-active-entities-create-index-sql]}])
+     daily-active-entities-create-index-sql]}
+   {:id "0003-drop-key-tables"
+    :statements
+    ["drop table if exists user_rsa_keys"
+     "drop table if exists graph_aes_keys"]}])
 
 (defn- <run-statements! [db statements]
   (reduce (fn [acc statement]
@@ -137,7 +137,7 @@
     (set (map (fn [row] (aget row "id")) rows))))
 
 (defn <apply-migrations!
-  "Applies, in list order, every migration whose id is not yet recorded."
+  "Applies, in id order, every migration whose id is not yet recorded."
   [db migrations]
   (p/let [_ (common/<d1-run db schema-migrations-table-sql)
           applied (<applied-migration-ids db)]
@@ -151,11 +151,12 @@
                                             id
                                             (common/now-ms)))))))
             (p/resolved nil)
-            migrations)))
+            (sort-by :id migrations))))
 
 (defn <index-init!
-  "Bootstraps the index database: the base migrations followed by the ones the
-  adapter contributes (the auth tables), each applied once."
+  "Bootstraps the index database: the base migrations and the ones the adapter
+  contributes (the auth tables), each applied once in id order, so a
+  migration's numeric prefix is its position."
   ([db] (<index-init! db []))
   ([db extra-migrations]
    (<apply-migrations! db (concat index-migrations extra-migrations))))
@@ -297,31 +298,30 @@
                                                      (aget row "graph_id"))))))))
 
 (defn <index-upsert!
-  ([db graph-id graph-name user-id schema-version graph-e2ee?]
-   (<index-upsert! db graph-id graph-name user-id schema-version graph-e2ee? true))
-  ([db graph-id graph-name user-id schema-version graph-e2ee? graph-ready-for-use?]
-   (p/let [now (common/now-ms)
-           graph-e2ee? (graph-e2ee-bool->sql graph-e2ee?)
-           graph-ready-for-use? (graph-ready-for-use-bool->sql graph-ready-for-use?)
-           result (common/<d1-run db
-                                  (str "insert into graphs (graph_id, graph_name, user_id, schema_version, graph_e2ee, graph_ready_for_use, created_at, updated_at) "
-                                       "values (?, ?, ?, ?, ?, ?, ?, ?) "
-                                       "on conflict(graph_id) do update set "
-                                       "graph_name = excluded.graph_name, "
-                                       "user_id = excluded.user_id, "
-                                       "schema_version = excluded.schema_version, "
-                                       "graph_e2ee = excluded.graph_e2ee, "
-                                       "graph_ready_for_use = excluded.graph_ready_for_use, "
-                                       "updated_at = excluded.updated_at")
-                                  graph-id
-                                  graph-name
-                                  user-id
-                                  schema-version
-                                  graph-e2ee?
-                                  graph-ready-for-use?
-                                  now
-                                  now)]
-     result)))
+  "Creates or updates a graph row. Every graph is encrypted with its own key,
+  so `graph_e2ee` is always 1."
+  [db graph-id graph-name user-id schema-version graph-ready-for-use?]
+  (p/let [now (common/now-ms)
+          graph-ready-for-use? (graph-ready-for-use-bool->sql graph-ready-for-use?)
+          result (common/<d1-run db
+                                 (str "insert into graphs (graph_id, graph_name, user_id, schema_version, graph_e2ee, graph_ready_for_use, created_at, updated_at) "
+                                      "values (?, ?, ?, ?, ?, ?, ?, ?) "
+                                      "on conflict(graph_id) do update set "
+                                      "graph_name = excluded.graph_name, "
+                                      "user_id = excluded.user_id, "
+                                      "schema_version = excluded.schema_version, "
+                                      "graph_e2ee = excluded.graph_e2ee, "
+                                      "graph_ready_for_use = excluded.graph_ready_for_use, "
+                                      "updated_at = excluded.updated_at")
+                                 graph-id
+                                 graph-name
+                                 user-id
+                                 schema-version
+                                 1
+                                 graph-ready-for-use?
+                                 now
+                                 now)]
+    result))
 
 (defn <graph-ready-for-use?
   [db graph-id]
@@ -333,15 +333,6 @@
             row (first rows)]
       (graph-ready-for-use-sql->bool (some-> row (aget "graph_ready_for_use"))))))
 
-(defn <graph-e2ee?
-  [db graph-id]
-  (when (string? graph-id)
-    (p/let [result (common/<d1-all db
-                                   "select graph_e2ee from graphs where graph_id = ?"
-                                   graph-id)
-            row (first (common/get-sql-rows result))]
-      (graph-e2ee-sql->bool (some-> row (aget "graph_e2ee"))))))
-
 (defn <graph-ready-for-use-set!
   [db graph-id graph-ready-for-use?]
   (when (string? graph-id)
@@ -352,9 +343,7 @@
                     graph-id)))
 
 (defn <graph-delete-metadata! [db graph-id]
-  (p/do!
-   (common/<d1-run db "delete from graph_aes_keys where graph_id = ?" graph-id)
-   (common/<d1-run db "delete from graph_members where graph_id = ?" graph-id)))
+  (common/<d1-run db "delete from graph_members where graph_id = ?" graph-id))
 
 (defn <graph-delete-index-entry! [db graph-id]
   (common/<d1-run db "delete from graphs where graph_id = ?" graph-id))
@@ -412,76 +401,6 @@
             row (first rows)]
       (when row
         (aget row "id")))))
-
-(defn <user-rsa-key-pair-upsert!
-  [db user-id public-key encrypted-private-key]
-  (when (string? user-id)
-    (let [now (common/now-ms)]
-      (common/<d1-run db
-                      (str "insert into user_rsa_keys (user_id, public_key, encrypted_private_key, created_at, updated_at) "
-                           "values (?, ?, ?, ?, ?) "
-                           "on conflict(user_id) do update set "
-                           "public_key = excluded.public_key, "
-                           "encrypted_private_key = excluded.encrypted_private_key, "
-                           "updated_at = excluded.updated_at")
-                      user-id
-                      public-key
-                      encrypted-private-key
-                      now
-                      now))))
-
-(defn <user-rsa-key-pair
-  [db user-id]
-  (when (string? user-id)
-    (p/let [result (common/<d1-all db {:session "first-primary"}
-                                   "select public_key, encrypted_private_key from user_rsa_keys where user_id = ?"
-                                   user-id)
-            rows (common/get-sql-rows result)
-            row (first rows)]
-      (when row
-        {:public-key (aget row "public_key")
-         :encrypted-private-key (aget row "encrypted_private_key")}))))
-
-(defn <user-rsa-public-key-by-email
-  [db email]
-  (when (string? email)
-    (p/let [result (common/<d1-all db {:session "first-primary"}
-                                   (str "select k.public_key from user_rsa_keys k "
-                                        "left join users u on k.user_id = u.id "
-                                        "where u.email = ?")
-                                   email)
-            rows (common/get-sql-rows result)
-            row (first rows)]
-      (when row
-        (aget row "public_key")))))
-
-(defn <graph-encrypted-aes-key-upsert!
-  [db graph-id user-id encrypted-aes-key]
-  (when (and (string? graph-id) (string? user-id))
-    (let [now (common/now-ms)]
-      (common/<d1-run db
-                      (str "insert into graph_aes_keys (graph_id, user_id, encrypted_aes_key, created_at, updated_at) "
-                           "values (?, ?, ?, ?, ?) "
-                           "on conflict(graph_id, user_id) do update set "
-                           "encrypted_aes_key = excluded.encrypted_aes_key, "
-                           "updated_at = excluded.updated_at")
-                      graph-id
-                      user-id
-                      encrypted-aes-key
-                      now
-                      now))))
-
-(defn <graph-encrypted-aes-key
-  [db graph-id user-id]
-  (when (and (string? graph-id) (string? user-id))
-    (p/let [result (common/<d1-all db
-                                   "select encrypted_aes_key from graph_aes_keys where graph_id = ? and user_id = ?"
-                                   graph-id
-                                   user-id)
-            rows (common/get-sql-rows result)
-            row (first rows)]
-      (when row
-        (aget row "encrypted_aes_key")))))
 
 (defn <graph-member-upsert! [db graph-id user-id role invited-by]
   (let [now (common/now-ms)]

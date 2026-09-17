@@ -73,7 +73,7 @@
                           (is false (str error))
                           (done)))))))
 
-(deftest index-upsert-persists-graph-e2ee-flag-test
+(deftest index-upsert-always-marks-the-graph-encrypted-test
   (async done
          (let [called (atom nil)]
            (-> (p/with-redefs [common/now-ms (fn [] 1234)
@@ -81,10 +81,10 @@
                                                 (reset! called {:sql sql
                                                                 :args args})
                                                 (p/resolved {:ok true}))]
-                 (index/<index-upsert! :db "graph-1" "Graph 1" "user-1" "65" false))
+                 (index/<index-upsert! :db "graph-1" "Graph 1" "user-1" "65" true))
                (p/then (fn [_]
                          (is (string/includes? (:sql @called) "graph_e2ee"))
-                         (is (= ["graph-1" "Graph 1" "user-1" "65" 0 1 1234 1234]
+                         (is (= ["graph-1" "Graph 1" "user-1" "65" 1 1 1234 1234]
                                 (:args @called)))
                          (done)))
                (p/catch (fn [error]
@@ -99,10 +99,10 @@
                                                 (reset! called {:sql sql
                                                                 :args args})
                                                 (p/resolved {:ok true}))]
-                 (index/<index-upsert! :db "graph-1" "Graph 1" "user-1" "65" false false))
+                 (index/<index-upsert! :db "graph-1" "Graph 1" "user-1" "65" false))
                (p/then (fn [_]
                          (is (string/includes? (:sql @called) "graph_ready_for_use"))
-                         (is (= ["graph-1" "Graph 1" "user-1" "65" 0 0 1234 1234]
+                         (is (= ["graph-1" "Graph 1" "user-1" "65" 1 0 1234 1234]
                                 (:args @called)))
                          (done)))
                (p/catch (fn [error]
@@ -185,6 +185,33 @@
                                    @sql-calls))
                          (is (some #(string/includes? % users-email-index-sql)
                                    @sql-calls))
+                         (done)))
+               (p/catch (fn [error]
+                          (is false (str error))
+                          (done)))))))
+
+(deftest apply-migrations-run-in-id-order-test
+  (async done
+         (let [runs (atom [])]
+           (-> (p/with-redefs [common/<d1-all (fn [& _]
+                                                (p/resolved #js {:results #js []}))
+                               common/get-sql-rows (fn [result]
+                                                     (aget result "results"))
+                               common/<d1-run (fn [_db sql & args]
+                                                (swap! runs conj (into [sql] args))
+                                                (p/resolved {:ok true}))]
+                 (index/<apply-migrations! :db [{:id "0003-third" :statements ["third"]}
+                                                {:id "0001-first" :statements ["first"]}
+                                                {:id "0002-second" :statements ["second"]}]))
+               (p/then (fn [_]
+                         (is (= ["first" "second" "third"]
+                                (->> @runs
+                                     (map first)
+                                     (filter #{"first" "second" "third"}))))
+                         (is (= ["0001-first" "0002-second" "0003-third"]
+                                (->> @runs
+                                     (filter (fn [[sql]] (string/starts-with? sql "insert into schema_migrations")))
+                                     (map second))))
                          (done)))
                (p/catch (fn [error]
                           (is false (str error))

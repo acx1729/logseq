@@ -7,6 +7,7 @@ const os = require("node:os");
 const path = require("node:path");
 const test = require("node:test");
 const { createSigner, fileSigner, parseTransitSignature, transitSigner } = require("./signers");
+const { createOpenBaoClient } = require("./openbao");
 const { mintToken, verifyToken } = require("./jwt");
 const { generateRsaPem, jsonResponse } = require("./test_helpers");
 
@@ -91,7 +92,7 @@ test("transitSigner logs in with AppRole, signs with the latest version and publ
   const v1 = crypto.generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey;
   const v2 = crypto.generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey;
   const backend = fakeTransit({ versions: { 1: v1, 2: v2 }, latestVersion: 2 });
-  const signer = transitSigner({ baseUrl: "https://bao.example.test/", keyName: "logseq-token", roleId: "role", secretId: "secret", fetch: backend.fetch });
+  const signer = transitSigner({ client: createOpenBaoClient({ baseUrl: "https://bao.example.test/", roleId: "role", secretId: "secret", fetch: backend.fetch }), keyName: "logseq-token" });
   const keys = await signer.publicKeys();
   assert.deepEqual(keys.map((k) => k.kid), ["v1", "v2"]);
   const iat = Math.floor(Date.now() / 1000);
@@ -106,7 +107,7 @@ test("transitSigner logs in with AppRole, signs with the latest version and publ
 test("transitSigner re-authenticates once when OpenBao answers 403", async () => {
   const v1 = crypto.generateKeyPairSync("rsa", { modulusLength: 2048 }).privateKey;
   const backend = fakeTransit({ versions: { 1: v1 }, latestVersion: 1 });
-  const signer = transitSigner({ baseUrl: "https://bao.example.test", keyName: "logseq-token", roleId: "role", secretId: "secret", fetch: backend.fetch });
+  const signer = transitSigner({ client: createOpenBaoClient({ baseUrl: "https://bao.example.test", roleId: "role", secretId: "secret", fetch: backend.fetch }), keyName: "logseq-token" });
   await signer.publicKeys();
   backend.validTokens.clear();
   const { sign } = await signer.signingKey();
@@ -119,19 +120,20 @@ test("transitSigner with a static token never calls approle login and rejects no
   const ec = crypto.generateKeyPairSync("ec", { namedCurve: "P-256" }).privateKey;
   const backend = fakeTransit({ versions: { 1: ec }, latestVersion: 1 });
   backend.validTokens.add("root");
-  const signer = transitSigner({ baseUrl: "https://bao.example.test", keyName: "logseq-token", token: "root", fetch: async (url, init) => {
+  const signer = transitSigner({ keyName: "logseq-token", client: createOpenBaoClient({ baseUrl: "https://bao.example.test", token: "root", fetch: async (url, init) => {
     const { pathname } = new URL(url);
     if (pathname === "/v1/transit/keys/logseq-token") {
       return jsonResponse(200, { data: { type: "ecdsa-p256", latest_version: 1, keys: { 1: { public_key: crypto.createPublicKey(ec).export({ type: "spki", format: "pem" }) } } } });
     }
     return backend.fetch(url, init);
-  } });
+  } }) });
   await assert.rejects(() => signer.publicKeys(), /RSA/);
   assert.equal(backend.calls.filter((call) => call.pathname === "/v1/auth/approle/login").length, 0);
 });
 
 test("transitSigner validates its configuration", () => {
-  assert.throws(() => transitSigner({ baseUrl: "bao.example.test", keyName: "k", token: "t" }), /http\(s\) URL/);
-  assert.throws(() => transitSigner({ baseUrl: "https://bao.example.test", keyName: "", token: "t" }), /key name/);
-  assert.throws(() => transitSigner({ baseUrl: "https://bao.example.test", keyName: "k" }), /token or an AppRole/);
+  const client = createOpenBaoClient({ baseUrl: "https://bao.example.test", token: "t" });
+  assert.throws(() => transitSigner({ keyName: "k" }), /OpenBao client/);
+  assert.throws(() => transitSigner({ client, keyName: "" }), /key name/);
+  assert.throws(() => createSigner({ kind: "transit", keyName: "k" }), /OpenBao client/);
 });

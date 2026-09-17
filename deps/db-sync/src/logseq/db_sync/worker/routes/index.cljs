@@ -10,20 +10,12 @@
                    "POST" :graphs/create}}]
     ["/:graph-id"
      ["/access" {:methods {"GET" :graphs/access}}]
+     ["/key" {:methods {"GET" :graphs/key}}]
      ["/members" {:methods {"GET" :graph-members/list
                             "POST" :graph-members/create}}]
      ["/members/:member-id" {:methods {"PUT" :graph-members/update
                                        "DELETE" :graph-members/delete}}]
-     ["" {:methods {"DELETE" :graphs/delete}}]]]
-
-   ["/e2ee"
-    ["/user-keys" {:methods {"GET" :e2ee/user-keys-get
-                             "POST" :e2ee/user-keys-post}}]
-    ["/user-public-key" {:methods {"GET" :e2ee/user-public-key-get}}]
-    ["/graphs/:graph-id"
-     ["/aes-key" {:methods {"GET" :e2ee/graph-aes-key-get
-                            "POST" :e2ee/graph-aes-key-post}}]
-     ["/grant-access" {:methods {"POST" :e2ee/grant-access}}]]]])
+     ["" {:methods {"DELETE" :graphs/delete}}]]]])
 
 (def ^:private router
   (r/router route-data))

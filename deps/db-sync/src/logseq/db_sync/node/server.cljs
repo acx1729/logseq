@@ -11,6 +11,7 @@
             [logseq.db-sync.node.config :as config]
             [logseq.db-sync.node.dispatch :as dispatch]
             [logseq.db-sync.node.graph :as graph]
+            [logseq.db-sync.node.keys :as keys]
             [logseq.db-sync.node.routes :as node-routes]
             [logseq.db-sync.node.storage :as storage]
             [logseq.db-sync.platform.core :as platform]
@@ -134,7 +135,10 @@
         index-db (storage/open-index-db (:data-dir cfg))
         assets-bucket (assets/make-bucket (node-path/join (:data-dir cfg) "assets"))
         registry (atom {})
-        signer (node-auth/create-signer cfg)]
+        openbao (when (keys/openbao-needed? cfg)
+                  (keys/create-openbao-client cfg))
+        signer (node-auth/create-signer cfg openbao)
+        key-store (keys/create-key-store cfg openbao)]
     (p/let [_ (index/<index-init! index-db (node-auth/auth-migrations))
             ^js auth-service (node-auth/create-service cfg signer index-db)
             verify-token (fn [token] (.verify auth-service token))
@@ -143,6 +147,7 @@
                   :assets-bucket assets-bucket
                   :verify-token verify-token}
             env (doto (make-env cfg index-db assets-bucket verify-token)
+                  (aset "DB_SYNC_GRAPH_KEYS" key-store)
                   (aset "DB_SYNC_DELETE_GRAPH"
                         (fn [graph-id]
                           (graph/delete-graph! registry deps graph-id)))
@@ -187,6 +192,7 @@
          :env env
          :registry registry
          :auth auth-service
+         :key-store key-store
          :port port
          :base-url base-url
          :stop! (fn []

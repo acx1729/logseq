@@ -170,6 +170,7 @@ def start_server(args: argparse.Namespace) -> None:
             "DB_SYNC_DATA_DIR": str(data_dir),
             "DB_SYNC_TOKEN_SIGNER": "file",
             "DB_SYNC_TOKEN_SIGNING_KEY_FILE": str(signing_key_file),
+            "DB_SYNC_KEY_STORE": "file",
             "DB_SYNC_TOKEN_ISSUER": base_url,
             "DB_SYNC_TOKEN_AUDIENCE": DEFAULT_TOKEN_AUDIENCE,
             "DB_SYNC_SIWE_DOMAINS": ",".join(sorted({siwe_domain, f"localhost:{args.port}", f"127.0.0.1:{args.port}"})),

@@ -7,6 +7,45 @@
             [logseq.db-sync.worker.handler.index :as index-handler]
             [promesa.core :as p]))
 
+(defn- fake-key-store
+  "In-memory graph key store shaped like worker/auth/keystore.js, recording
+  every call in order."
+  ([] (fake-key-store {}))
+  ([{:keys [create-error]}]
+   (let [keys* (atom {})
+         calls* (atom [])]
+     {:keys* keys*
+      :calls* calls*
+      :store #js {:createKey (fn [graph-id]
+                               (swap! calls* conj [:create graph-id])
+                               (if create-error
+                                 (p/rejected create-error)
+                                 (let [graph-key (js/Buffer.alloc 32 7)]
+                                   (swap! keys* assoc graph-id graph-key)
+                                   (p/resolved graph-key))))
+                  :getKey (fn [graph-id]
+                            (swap! calls* conj [:get graph-id])
+                            (p/resolved (get @keys* graph-id nil)))
+                  :deleteKey (fn [graph-id]
+                               (swap! calls* conj [:delete graph-id])
+                               (swap! keys* dissoc graph-id)
+                               (p/resolved nil))}})))
+
+(defn- env-with-key-store [key-store]
+  #js {"DB_SYNC_GRAPH_KEYS" (:store key-store)})
+
+(defn- <handle
+  [{:keys [request env claims route]}]
+  (index-handler/handle {:db :db
+                         :env env
+                         :request request
+                         :claims (or claims #js {"sub" "user-1"})
+                         :route route}))
+
+(defn- <json-body [resp]
+  (p/let [text (.text resp)]
+    (js->clj (js/JSON.parse text) :keywordize-keys true)))
+
 (deftest graph-access-response-with-timing-caches-result-test
   (async done
          (let [request (js/Request. "http://localhost/sync/graph-1"
@@ -54,17 +93,32 @@
                           (is false (str error))
                           (done)))))))
 
-(deftest graphs-create-defaults-ready-for-use-true-test
+(deftest graphs-list-carries-no-key-material-test
+  (async done
+         (let [request (js/Request. "http://localhost/graphs" #js {:method "GET"})]
+           (-> (p/with-redefs [index/<index-list (fn [_db _user-id]
+                                                   (p/resolved []))]
+                 (p/let [resp (<handle {:request request
+                                        :env #js {}
+                                        :route {:handler :graphs/list
+                                                :path-params {}}})
+                         body (<json-body resp)]
+                   (is (= 200 (.-status resp)))
+                   (is (= {:graphs []} body))))
+               (p/then (fn []
+                         (done)))
+               (p/catch (fn [error]
+                          (is false (str error))
+                          (done)))))))
+
+(deftest graphs-create-writes-the-key-before-the-rows-test
   (async done
          (let [request (js/Request. "http://localhost/graphs" #js {:method "POST"})
-               url (js/URL. (.-url request))
+               key-store (fake-key-store)
                d1-runs (atom [])]
            (-> (p/with-redefs [common/read-json (fn [_]
                                                   (p/resolved #js {"graph-name" "Graph 1"
                                                                    "schema-version" "65"}))
-                               index/<user-rsa-key-pair (fn [_db _user-id]
-                                                          (p/resolved {:public-key "pk"
-                                                                       :encrypted-private-key "enc"}))
                                common/<d1-all (fn [& _]
                                                 (p/resolved #js {:results #js []}))
                                common/get-sql-rows (fn [result]
@@ -72,187 +126,143 @@
                                common/<d1-run (fn [_db sql & args]
                                                 (swap! d1-runs conj {:sql sql
                                                                      :args args})
+                                                (swap! (:calls* key-store) conj [:insert])
                                                 (p/resolved {:ok true}))]
-                 (p/let [resp (index-handler/handle {:db :db
-                                                     :env #js {}
-                                                     :request request
-                                                     :url url
-                                                     :claims #js {"sub" "user-1"}
-                                                     :route {:handler :graphs/create
-                                                             :path-params {}}})
-                         text (.text resp)
-                         body (js->clj (js/JSON.parse text) :keywordize-keys true)
+                 (p/let [resp (<handle {:request request
+                                        :env (env-with-key-store key-store)
+                                        :route {:handler :graphs/create
+                                                :path-params {}}})
+                         body (<json-body resp)
                          graph-insert (first @d1-runs)]
                    (is (= 200 (.-status resp)))
-                   (is (string/includes? (:sql graph-insert) "graph_ready_for_use"))
-                   (is (= 1 (nth (:args graph-insert) 5)))
-                   (is (= true (:graph-ready-for-use? body)))))
-               (p/then (fn []
-                         (done)))
-               (p/catch (fn [error]
-                          (is false (str error))
-                          (done)))))))
-
-(deftest graphs-list-includes-user-rsa-keys-exists-flag-true-test
-  (async done
-         (let [request (js/Request. "http://localhost/graphs" #js {:method "GET"})
-               url (js/URL. (.-url request))]
-           (-> (p/with-redefs [index/<index-list (fn [_db _user-id]
-                                                   (p/resolved []))
-                               index/<user-rsa-key-pair (fn [_db _user-id]
-                                                          (p/resolved {:public-key "pk"
-                                                                       :encrypted-private-key "enc"}))]
-                 (p/let [resp (index-handler/handle {:db :db
-                                                     :env #js {}
-                                                     :request request
-                                                     :url url
-                                                     :claims #js {"sub" "user-1"}
-                                                     :route {:handler :graphs/list
-                                                             :path-params {}}})
-                         text (.text resp)
-                         body (js->clj (js/JSON.parse text) :keywordize-keys true)]
-                   (is (= 200 (.-status resp)))
-                   (is (= [] (:graphs body)))
-                   (is (= true (:user-rsa-keys-exists? body)))))
-               (p/then (fn []
-                         (done)))
-               (p/catch (fn [error]
-                          (is false (str error))
-                          (done)))))))
-
-(deftest graphs-list-includes-user-rsa-keys-exists-flag-false-test
-  (async done
-         (let [request (js/Request. "http://localhost/graphs" #js {:method "GET"})
-               url (js/URL. (.-url request))]
-           (-> (p/with-redefs [index/<index-list (fn [_db _user-id]
-                                                   (p/resolved []))
-                               index/<user-rsa-key-pair (fn [_db _user-id]
-                                                          (p/resolved nil))]
-                 (p/let [resp (index-handler/handle {:db :db
-                                                     :env #js {}
-                                                     :request request
-                                                     :url url
-                                                     :claims #js {"sub" "user-1"}
-                                                     :route {:handler :graphs/list
-                                                             :path-params {}}})
-                         text (.text resp)
-                         body (js->clj (js/JSON.parse text) :keywordize-keys true)]
-                   (is (= 200 (.-status resp)))
-                   (is (= [] (:graphs body)))
-                   (is (= false (:user-rsa-keys-exists? body)))))
-               (p/then (fn []
-                         (done)))
-               (p/catch (fn [error]
-                          (is false (str error))
-                          (done)))))))
-
-(deftest graphs-create-e2ee-requires-user-rsa-key-pair-test
-  (async done
-         (let [request (js/Request. "http://localhost/graphs" #js {:method "POST"})
-               url (js/URL. (.-url request))
-               index-upsert-calls* (atom 0)]
-           (-> (p/with-redefs [common/read-json (fn [_]
-                                                  (p/resolved #js {"graph-name" "Graph E2EE"
-                                                                   "schema-version" "65"
-                                                                   "graph-e2ee?" true}))
-                               index/<graph-name-exists? (fn [_db _graph-name _user-id]
-                                                           (p/resolved false))
-                               index/<user-rsa-key-pair (fn [_db _user-id]
-                                                          (p/resolved nil))
-                               index/<index-upsert! (fn
-                                                      ([_db _graph-id _graph-name _user-id _schema-version _graph-e2ee?]
-                                                       (swap! index-upsert-calls* inc)
-                                                       (p/resolved nil))
-                                                      ([_db _graph-id _graph-name _user-id _schema-version _graph-e2ee? _graph-ready-for-use?]
-                                                       (swap! index-upsert-calls* inc)
-                                                       (p/resolved nil)))
-                               index/<graph-member-upsert! (fn [& _]
-                                                             (p/resolved nil))]
-                 (p/let [resp (index-handler/handle {:db :db
-                                                     :env #js {}
-                                                     :request request
-                                                     :url url
-                                                     :claims #js {"sub" "user-1"}
-                                                     :route {:handler :graphs/create
-                                                             :path-params {}}})
-                         text (.text resp)
-                         body (js->clj (js/JSON.parse text) :keywordize-keys true)]
-                   (is (= 400 (.-status resp)))
-                   (is (= "missing user rsa key pair" (:error body)))
-                   (is (zero? @index-upsert-calls*))))
-               (p/then (fn []
-                         (done)))
-               (p/catch (fn [error]
-                          (is false (str error))
-                          (done)))))))
-
-(deftest graphs-create-non-e2ee-skips-user-rsa-key-pair-test
-  (async done
-         (let [request (js/Request. "http://localhost/graphs" #js {:method "POST"})
-               url (js/URL. (.-url request))
-               index-upsert-calls* (atom 0)]
-           (-> (p/with-redefs [common/read-json (fn [_]
-                                                  (p/resolved #js {"graph-name" "Graph Plain"
-                                                                   "schema-version" "65"
-                                                                   "graph-e2ee?" false}))
-                               index/<graph-name-exists? (fn [_db _graph-name _user-id]
-                                                           (p/resolved false))
-                               index/<user-rsa-key-pair (fn [_db _user-id]
-                                                          (p/resolved nil))
-                               index/<index-upsert! (fn
-                                                      ([_db _graph-id _graph-name _user-id _schema-version _graph-e2ee?]
-                                                       (swap! index-upsert-calls* inc)
-                                                       (p/resolved nil))
-                                                      ([_db _graph-id _graph-name _user-id _schema-version _graph-e2ee? _graph-ready-for-use?]
-                                                       (swap! index-upsert-calls* inc)
-                                                       (p/resolved nil)))
-                               index/<graph-member-upsert! (fn [& _]
-                                                             (p/resolved nil))]
-                 (p/let [resp (index-handler/handle {:db :db
-                                                     :env #js {}
-                                                     :request request
-                                                     :url url
-                                                     :claims #js {"sub" "user-1"}
-                                                     :route {:handler :graphs/create
-                                                             :path-params {}}})
-                         text (.text resp)
-                         body (js->clj (js/JSON.parse text) :keywordize-keys true)]
-                   (is (= 200 (.-status resp)))
                    (is (string? (:graph-id body)))
-                   (is (= false (:graph-e2ee? body)))
-                   (is (= 1 @index-upsert-calls*))))
+                   (is (= true (:graph-e2ee? body)))
+                   (is (= true (:graph-ready-for-use? body)))
+                   (is (string/includes? (:sql graph-insert) "graph_ready_for_use"))
+                   (is (= 1 (nth (:args graph-insert) 4)))
+                   (is (= 1 (nth (:args graph-insert) 5)))
+                   (is (= [[:create (:graph-id body)] [:insert] [:insert]] @(:calls* key-store)))
+                   (is (contains? @(:keys* key-store) (:graph-id body)))))
                (p/then (fn []
                          (done)))
                (p/catch (fn [error]
                           (is false (str error))
                           (done)))))))
 
-(deftest graphs-delete-supports-node-delete-hook-without-do-namespace-test
+(deftest graphs-create-answers-503-without-rows-when-the-key-store-fails-test
+  (async done
+         (let [request (js/Request. "http://localhost/graphs" #js {:method "POST"})
+               key-store (fake-key-store {:create-error (js/Error. "openbao down")})
+               d1-runs (atom 0)]
+           (-> (p/with-redefs [common/read-json (fn [_]
+                                                  (p/resolved #js {"graph-name" "Graph 2"
+                                                                   "schema-version" "65"}))
+                               index/<graph-name-exists? (fn [_db _graph-name _user-id]
+                                                           (p/resolved false))
+                               common/<d1-run (fn [& _]
+                                                (swap! d1-runs inc)
+                                                (p/resolved {:ok true}))]
+                 (p/let [resp (<handle {:request request
+                                        :env (env-with-key-store key-store)
+                                        :route {:handler :graphs/create
+                                                :path-params {}}})
+                         body (<json-body resp)]
+                   (is (= 503 (.-status resp)))
+                   (is (= "graph key store unavailable" (:error body)))
+                   (is (zero? @d1-runs))
+                   (is (= [:create] (mapv first @(:calls* key-store))))))
+               (p/then (fn []
+                         (done)))
+               (p/catch (fn [error]
+                          (is false (str error))
+                          (done)))))))
+
+(deftest graphs-create-removes-the-key-when-the-rows-fail-test
+  (async done
+         (let [request (js/Request. "http://localhost/graphs" #js {:method "POST"})
+               key-store (fake-key-store)]
+           (-> (p/with-redefs [common/read-json (fn [_]
+                                                  (p/resolved #js {"graph-name" "Graph 3"
+                                                                   "schema-version" "65"}))
+                               index/<graph-name-exists? (fn [_db _graph-name _user-id]
+                                                           (p/resolved false))
+                               index/<index-upsert! (fn [& _]
+                                                      (p/rejected (js/Error. "disk full")))]
+                 (-> (<handle {:request request
+                               :env (env-with-key-store key-store)
+                               :route {:handler :graphs/create
+                                       :path-params {}}})
+                     (p/then (fn [_]
+                               (is false "graph creation should fail")))
+                     (p/catch (fn [error]
+                                (is (= "disk full" (.-message error)))
+                                (is (= [:create :delete] (mapv first @(:calls* key-store))))
+                                (is (empty? @(:keys* key-store)))))))
+               (p/then (fn []
+                         (done)))
+               (p/catch (fn [error]
+                          (is false (str error))
+                          (done)))))))
+
+(deftest graphs-key-is-served-to-members-only-test
+  (async done
+         (let [request (js/Request. "http://localhost/graphs/graph-1/key" #js {:method "GET"})
+               key-store (fake-key-store)
+               route {:handler :graphs/key
+                      :path-params {:graph-id "graph-1"}}
+               access* (atom true)]
+           (-> (p/with-redefs [index/<user-has-access-to-graph? (fn [_db _graph-id _user-id]
+                                                                  (p/resolved @access*))]
+                 (p/let [missing (<handle {:request request
+                                           :env (env-with-key-store key-store)
+                                           :route route})
+                         graph-key (.createKey (:store key-store) "graph-1")
+                         resp (<handle {:request request
+                                        :env (env-with-key-store key-store)
+                                        :route route})
+                         body (<json-body resp)
+                         _ (reset! access* false)
+                         forbidden (<handle {:request request
+                                             :env (env-with-key-store key-store)
+                                             :route route})
+                         anonymous (<handle {:request request
+                                             :env (env-with-key-store key-store)
+                                             :claims #js {}
+                                             :route route})]
+                   (is (= 404 (.-status missing)))
+                   (is (= 200 (.-status resp)))
+                   (is (= (.toString graph-key "base64") (:key body)))
+                   (is (= 403 (.-status forbidden)))
+                   (is (= 401 (.-status anonymous)))))
+               (p/then (fn []
+                         (done)))
+               (p/catch (fn [error]
+                          (is false (str error))
+                          (done)))))))
+
+(deftest graphs-delete-removes-storage-then-the-key-test
   (async done
          (let [request (js/Request. "http://localhost/graphs/graph-1" #js {:method "DELETE"})
-               url (js/URL. (.-url request))
-               hook-calls* (atom [])]
+               key-store (fake-key-store)
+               env (doto (env-with-key-store key-store)
+                     (aset "DB_SYNC_DELETE_GRAPH"
+                           (fn [graph-id]
+                             (swap! (:calls* key-store) conj [:storage graph-id])
+                             (p/resolved true))))]
            (-> (p/with-redefs [index/<user-has-access-to-graph? (fn [_db _graph-id _user-id]
                                                                   (p/resolved true))
                                index/<graph-delete-metadata! (fn [_db _graph-id]
                                                                (p/resolved true))
                                index/<graph-delete-index-entry! (fn [_db _graph-id]
                                                                   (p/resolved true))]
-                 (p/let [resp (index-handler/handle {:db :db
-                                                     :env #js {"DB_SYNC_DELETE_GRAPH"
-                                                               (fn [graph-id]
-                                                                 (swap! hook-calls* conj graph-id)
-                                                                 (p/resolved true))}
-                                                     :request request
-                                                     :url url
-                                                     :claims #js {"sub" "user-1"}
-                                                     :route {:handler :graphs/delete
-                                                             :path-params {:graph-id "graph-1"}}})
-                         text (.text resp)
-                         body (js->clj (js/JSON.parse text) :keywordize-keys true)]
+                 (p/let [resp (<handle {:request request
+                                        :env env
+                                        :route {:handler :graphs/delete
+                                                :path-params {:graph-id "graph-1"}}})
+                         body (<json-body resp)]
                    (is (= 200 (.-status resp)))
                    (is (= {:graph-id "graph-1" :deleted true} body))
-                   (is (= ["graph-1"] @hook-calls*))))
+                   (is (= [[:storage "graph-1"] [:delete "graph-1"]] @(:calls* key-store)))))
                (p/then (fn []
                          (done)))
                (p/catch (fn [error]

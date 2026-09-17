@@ -21,6 +21,15 @@
          (seq expected)
          (= expected actual))))
 
+(defn- graph-key-store
+  "The graph key store the adapter injects; every graph key lives there and
+  never in the index database."
+  [^js env]
+  (let [store (aget env "DB_SYNC_GRAPH_KEYS")]
+    (when-not store
+      (throw (ex-info "DB_SYNC_GRAPH_KEYS is not configured" {})))
+    store))
+
 (declare invalidate-graph-access!)
 
 (defn- <delete-graph-storage!
@@ -30,12 +39,43 @@
       (throw (ex-info "DB_SYNC_DELETE_GRAPH is not configured" {:graph-id graph-id})))
     (delete-graph-fn graph-id)))
 
-(defn- <delete-graph! [db ^js env graph-id]
+(defn- <delete-graph!
+  "Removes the graph's rows, storage and cached access, and only then its key,
+  so a failure part-way leaves the remaining data decryptable."
+  [db ^js env graph-id]
   (p/do!
    (index/<graph-delete-metadata! db graph-id)
    (<delete-graph-storage! env graph-id)
    (index/<graph-delete-index-entry! db graph-id)
-   (invalidate-graph-access! graph-id)))
+   (invalidate-graph-access! graph-id)
+   (.deleteKey (graph-key-store env) graph-id)))
+
+(defn- <create-graph!
+  "Generates the graph key first, then the index rows. A key store failure
+  answers 503 with nothing written; a row failure removes the key again."
+  [db ^js env graph-id graph-name user-id schema-version graph-ready-for-use?]
+  (let [^js store (graph-key-store env)]
+    (p/let [key-created? (-> (.createKey store graph-id)
+                             (p/then (fn [_] true))
+                             (p/catch (fn [error]
+                                        (log/error :db-sync/graph-key-create-failed
+                                                   {:graph-id graph-id :error error})
+                                        false)))]
+      (if-not key-created?
+        (http/error-response "graph key store unavailable" 503)
+        (-> (p/do!
+             (index/<index-upsert! db graph-id graph-name user-id schema-version graph-ready-for-use?)
+             (index/<graph-member-upsert! db graph-id user-id "manager" user-id))
+            (p/then (fn [_]
+                      (http/json-response :graphs/create {:graph-id graph-id
+                                                          :graph-e2ee? true
+                                                          :graph-ready-for-use? graph-ready-for-use?})))
+            (p/catch (fn [error]
+                       (-> (.deleteKey store graph-id)
+                           (p/catch (fn [key-error]
+                                      (log/error :db-sync/graph-key-rollback-failed
+                                                 {:graph-id graph-id :error key-error})))
+                           (p/then (fn [_] (throw error)))))))))))
 
 (defn- <revoke-member-access!
   "Makes a membership removal take effect now: forgets cached access decisions
@@ -81,7 +121,7 @@
         (p/resolved nil)))
     (p/resolved nil)))
 
-(defn ^:large-vars/cleanup-todo handle [{:keys [db ^js env request ^js url claims route]}]
+(defn ^:large-vars/cleanup-todo handle [{:keys [db ^js env request claims route]}]
   (let [path-params (:path-params route)
         graph-id (:graph-id path-params)
         member-id (:member-id path-params)
@@ -89,14 +129,8 @@
     (case (:handler route)
       :graphs/list
       (if (string? user-id)
-        (p/let [graphs (index/<index-list db user-id)
-                user-rsa-key-pair (index/<user-rsa-key-pair db user-id)
-                user-rsa-keys-exists?
-                (and (string? (:public-key user-rsa-key-pair))
-                     (string? (:encrypted-private-key user-rsa-key-pair)))]
-          (http/json-response :graphs/list
-                              {:graphs graphs
-                               :user-rsa-keys-exists? user-rsa-keys-exists?}))
+        (p/let [graphs (index/<index-list db user-id)]
+          (http/json-response :graphs/list {:graphs graphs}))
         (http/unauthorized))
 
       :graphs/create
@@ -115,23 +149,12 @@
                      (http/bad-request "invalid body")
 
                      :else
-                     (p/let [{:keys [graph-name schema-version graph-e2ee? graph-ready-for-use?]} body
-                             graph-e2ee? (if (nil? graph-e2ee?) true (true? graph-e2ee?))
+                     (p/let [{:keys [graph-name schema-version graph-ready-for-use?]} body
                              graph-ready-for-use? (if (nil? graph-ready-for-use?) true (true? graph-ready-for-use?))
-                             name-exists? (index/<graph-name-exists? db graph-name user-id)
-                             user-rsa-key-pair (index/<user-rsa-key-pair db user-id)
-                             has-user-rsa-key-pair?
-                             (and (string? (:public-key user-rsa-key-pair))
-                                  (string? (:encrypted-private-key user-rsa-key-pair)))]
+                             name-exists? (index/<graph-name-exists? db graph-name user-id)]
                        (if name-exists?
                          (http/bad-request "duplicate graph name")
-                         (if (and graph-e2ee? (not has-user-rsa-key-pair?))
-                           (http/bad-request "missing user rsa key pair")
-                           (p/let [_ (index/<index-upsert! db graph-id graph-name user-id schema-version graph-e2ee? graph-ready-for-use?)
-                                   _ (index/<graph-member-upsert! db graph-id user-id "manager" user-id)]
-                             (http/json-response :graphs/create {:graph-id graph-id
-                                                                 :graph-e2ee? graph-e2ee?
-                                                                 :graph-ready-for-use? graph-ready-for-use?}))))))))))
+                         (<create-graph! db env graph-id graph-name user-id schema-version graph-ready-for-use?))))))))
 
       :graphs/access
       (cond
@@ -143,6 +166,20 @@
           (if owns?
             (http/json-response :graphs/access {:ok true})
             (http/forbidden))))
+
+      :graphs/key
+      (cond
+        (not (string? user-id))
+        (http/unauthorized)
+
+        :else
+        (p/let [access? (index/<user-has-access-to-graph? db graph-id user-id)]
+          (if-not access?
+            (http/forbidden)
+            (p/let [graph-key (.getKey (graph-key-store env) graph-id)]
+              (if (nil? graph-key)
+                (http/error-response "graph key not found" 404)
+                (http/json-response :graphs/key {:key (.toString graph-key "base64")}))))))
 
       :graph-members/list
       (cond
@@ -265,105 +302,6 @@
         (p/let [_ (<delete-graph! db env graph-id)]
           (http/json-response :graphs/delete {:graph-id graph-id :deleted true}))
         (http/bad-request "missing graph id"))
-
-      :e2ee/user-keys-get
-      (if (string? user-id)
-        (p/let [pair (index/<user-rsa-key-pair db user-id)]
-          (http/json-response :e2ee/user-keys (or pair {})))
-        (http/unauthorized))
-
-      :e2ee/user-keys-post
-      (.then (common/read-json request)
-             (fn [result]
-               (if (nil? result)
-                 (http/bad-request "missing body")
-                 (let [body (js->clj result :keywordize-keys true)
-                       body (http/coerce-http-request :e2ee/user-keys body)]
-                   (cond
-                     (not (string? user-id))
-                     (http/unauthorized)
-
-                     (nil? body)
-                     (http/bad-request "invalid body")
-
-                     :else
-                     (let [{:keys [public-key encrypted-private-key]} body]
-                       (p/let [_ (index/<user-rsa-key-pair-upsert! db user-id public-key encrypted-private-key)]
-                         (http/json-response :e2ee/user-keys {:public-key public-key
-                                                              :encrypted-private-key encrypted-private-key}))))))))
-
-      :e2ee/user-public-key-get
-      (let [email (.get (.-searchParams url) "email")]
-        (p/let [public-key (index/<user-rsa-public-key-by-email db email)]
-          (http/json-response :e2ee/user-public-key
-                              (cond-> {}
-                                (some? public-key)
-                                (assoc :public-key public-key)))))
-
-      :e2ee/graph-aes-key-get
-      (cond
-        (not (string? user-id))
-        (http/unauthorized)
-
-        :else
-        (p/let [access? (index/<user-has-access-to-graph? db graph-id user-id)]
-          (if (not access?)
-            (http/forbidden)
-            (p/let [encrypted-aes-key (index/<graph-encrypted-aes-key db graph-id user-id)]
-              (http/json-response :e2ee/graph-aes-key {:encrypted-aes-key encrypted-aes-key})))))
-
-      :e2ee/graph-aes-key-post
-      (cond
-        (not (string? user-id))
-        (http/unauthorized)
-
-        :else
-        (.then (common/read-json request)
-               (fn [result]
-                 (if (nil? result)
-                   (http/bad-request "missing body")
-                   (let [body (js->clj result :keywordize-keys true)
-                         body (http/coerce-http-request :e2ee/graph-aes-key body)]
-                     (if (nil? body)
-                       (http/bad-request "invalid body")
-                       (p/let [access? (index/<user-has-access-to-graph? db graph-id user-id)]
-                         (if (not access?)
-                           (http/forbidden)
-                           (let [{:keys [encrypted-aes-key]} body]
-                             (p/let [_ (index/<graph-encrypted-aes-key-upsert! db graph-id user-id encrypted-aes-key)]
-                               (http/json-response :e2ee/graph-aes-key {:encrypted-aes-key encrypted-aes-key})))))))))))
-
-      :e2ee/grant-access
-      (if (not (string? user-id))
-        (http/unauthorized)
-        (.then (common/read-json request)
-               (fn [result]
-                 (if (nil? result)
-                   (http/bad-request "missing body")
-                   (let [body (js->clj result :keywordize-keys true)
-                         body (http/coerce-http-request :e2ee/grant-access body)]
-                     (if (nil? body)
-                       (http/bad-request "invalid body")
-                       (p/let [manager? (index/<user-is-manager? db graph-id user-id)]
-                         (if (not manager?)
-                           (http/forbidden)
-                           (let [entries (:target-user-email+encrypted-aes-key-coll body)
-                                 missing (atom [])]
-                             (p/let [_ (p/all
-                                        (map (fn [entry]
-                                               (let [email (:email entry)
-                                                     encrypted-aes-key (:encrypted-aes-key entry)]
-                                                 (p/let [target-user-id (index/<user-id-by-email db email)
-                                                         access? (and target-user-id
-                                                                      (index/<user-has-access-to-graph? db graph-id target-user-id))]
-                                                   (if (and target-user-id access?)
-                                                     (index/<graph-encrypted-aes-key-upsert! db graph-id target-user-id encrypted-aes-key)
-                                                     (swap! missing conj email)))))
-                                             entries))]
-                               (http/json-response :e2ee/grant-access
-                                                   (cond-> {:ok true}
-                                                     (seq @missing)
-                                                     (assoc :missing-users @missing)))))))))))))
 
       (http/not-found))))
 

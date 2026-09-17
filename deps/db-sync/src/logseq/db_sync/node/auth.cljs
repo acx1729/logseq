@@ -23,20 +23,16 @@
 
 (defn create-signer
   "Token signer from the normalized configuration: a PEM key file for
-  development and CI, or an OpenBao Transit key in production."
-  [{:keys [token-signer token-signing-key-file bao-addr bao-transit-mount bao-transit-key
-           bao-token bao-role-id bao-secret-id bao-secret-id-file]}]
+  development and CI, or an OpenBao Transit key over the shared OpenBao
+  session in production."
+  [{:keys [token-signer token-signing-key-file bao-transit-mount bao-transit-key]} openbao-client]
   (.createSigner auth-lib
                  (if (= "file" token-signer)
                    #js {:kind "file" :keyFile token-signing-key-file}
                    #js {:kind "transit"
-                        :baseUrl bao-addr
+                        :client openbao-client
                         :mount bao-transit-mount
-                        :keyName bao-transit-key
-                        :token bao-token
-                        :roleId bao-role-id
-                        :secretId bao-secret-id
-                        :secretIdFile bao-secret-id-file})))
+                        :keyName bao-transit-key})))
 
 (defn create-service
   "Builds the auth service on the index database. Its tables come from
