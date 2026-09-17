@@ -482,21 +482,6 @@
         :else
         (route-handler/redirect-to-page! (:block/uuid asset))))))
 
-(defn ensure-user-rsa-keys-if-possible!
-  []
-  (if @state/*db-worker
-    (-> (p/do!
-         (state/pub-event! [:rtc/sync-app-state])
-         (state/<invoke-db-worker :thread-api/set-db-sync-config
-                                  {:enabled? true
-                                   :ws-url (config/db-sync-ws-url)
-                                   :http-base (config/db-sync-http-base)})
-         (state/<invoke-db-worker :thread-api/db-sync-ensure-user-rsa-keys))
-        (p/catch (fn [error]
-                   (log/error :db-sync/ensure-user-rsa-keys-failed error)
-                   nil)))
-    (p/resolved nil)))
-
 (defevent! :user/fetch-info-and-graphs [[_]]
   (state/set-state! [:ui/loading? :login] false)
   (async/go
@@ -508,8 +493,7 @@
         (do
           (state/set-user-info! result)
           (when-let [uid (user-handler/user-uuid)]
-            (sentry-event/set-user! uid)
-            (ensure-user-rsa-keys-if-possible!))
+            (sentry-event/set-user! uid))
           (let [status (if (user-handler/alpha-or-beta-user?) :welcome :unavailable)
                 fetch-graphs? (and (user-handler/logged-in?)
                                    (or (= status :welcome)

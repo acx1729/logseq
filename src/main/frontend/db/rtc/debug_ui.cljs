@@ -24,7 +24,6 @@
   []
   (let [[debug-state*] (hooks/use-atom debug-state)
         [rtc-logs set-rtc-logs!] (hooks/use-state nil)
-        [keys-state set-keys-state!] (hooks/use-state nil)
         [current-page-blocks-count set-current-page-blocks-count!] (hooks/use-state nil)
         rtc-state (:rtc-state debug-state*)]
     (hooks/use-effect!
@@ -106,31 +105,4 @@
         :class "text-red-rx-09 border-red-rx-08 hover:text-red-rx-10"
         :size :sm
         :on-click (fn [] (stop))}
-       (shui/tabler-icon "player-stop") "stop")]
-
-     [:hr.my-2]
-     [:div
-        [:div.pb-2.flex.flex-row.items-center.gap-2
-         (shui/button
-          {:size :sm
-           :on-click (fn [_]
-                       (when-let [user-uuid (user/user-uuid)]
-                         (p/let [user-rsa-key-pair (state/<invoke-db-worker
-                                                    :thread-api/get-user-rsa-key-pair
-                                                    (state/get-auth-id-token) user-uuid)]
-                           (set-keys-state! user-rsa-key-pair))))}
-         (shui/tabler-icon "refresh") "keys-state")
-         (shui/button
-          {:size :sm
-           :on-click (fn [_]
-                       (when-let [token (state/get-auth-id-token)]
-                         (-> (state/<invoke-db-worker
-                              :thread-api/init-user-rsa-key-pair token (user/user-uuid))
-                             (p/catch (fn [error]
-                                        (log/error :init-user-rsa-key-pair error))))))}
-          (shui/tabler-icon "upload") "init upload user rsa-key-pair")]
-        [:div.pb-1
-         [:pre.select-text
-          (-> keys-state
-              (fipp/pprint {:width 20})
-              with-out-str)]]]]))
+       (shui/tabler-icon "player-stop") "stop")]]))

@@ -20,7 +20,6 @@ const builtinModuleSet = new Set([
 ]);
 const externalModuleSet = new Set([
   "@zvec/zvec",
-  "keytar",
   "ws",
 ]);
 
@@ -126,11 +125,6 @@ async function main() {
   }
 
   const bundleContents = await fs.readFile(bundleEntry, "utf8");
-  if (bundleContents.includes("node_modules/.pnpm/keytar")) {
-    throw new Error(
-      "vite bundle contains a pnpm keytar native path; keytar must stay external"
-    );
-  }
   if (bundleContents.includes("ws does not work in the browser")) {
     throw new Error(
       "vite bundle contains the ws browser stub; ws must stay external"

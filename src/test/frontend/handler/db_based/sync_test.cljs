@@ -99,47 +99,20 @@
                             (state/replace-state! state-prev)
                             (finish-async-test! done)))))))
 
-(deftest rtc-create-graph-persists-disabled-e2ee-flag-test
-  (async done
-         (let [worker-calls (atom [])]
-           (-> (p/with-redefs [db-sync/http-base (fn [] "http://base")
-                               state/<invoke-db-worker (fn [& args]
-                                                         (swap! worker-calls conj args)
-                                                         (p/resolved {:graph-id "graph-1"
-                                                                      :graph-e2ee? false}))]
-                 (db-sync/<rtc-create-graph! "logseq_db_demo" false))
-               (p/then (fn [result]
-                         (is (= {:graph-id "graph-1"
-                                 :graph-e2ee? false}
-                                result))
-                         (is (= [[:thread-api/db-sync-create-remote-graph
-                                  "logseq_db_demo"
-                                  false
-                                  true]]
-                                @worker-calls))
-                         (finish-async-test! done)))
-               (p/catch (fn [e]
-                          (is false (str e))
-                          (finish-async-test! done)))))))
-
-(deftest rtc-create-graph-defaults-e2ee-enabled-test
+(deftest rtc-create-graph-defaults-ready-for-use-test
   (async done
          (let [worker-calls (atom [])]
            (-> (p/with-redefs [db-sync/http-base (fn [] "http://base")
                                user-handler/<ensure-id&access-token! (fn [] (p/resolved true))
                                state/<invoke-db-worker (fn [& args]
                                                          (swap! worker-calls conj args)
-                                                         (p/resolved {:graph-id "graph-2"
-                                                                      :graph-e2ee? true}))]
-                 (db-sync/<rtc-create-graph! "logseq_db_demo"))
-               (p/then (fn [result]
-                         (is (= {:graph-id "graph-2"
-                                 :graph-e2ee? true}
-                                result))
-                         (is (= [[:thread-api/db-sync-create-remote-graph
-                                  "logseq_db_demo"
-                                  true
-                                  true]]
+                                                         (p/resolved {:graph-id "graph-2"}))]
+                 (p/all [(db-sync/<rtc-create-graph! "logseq_db_demo")
+                         (db-sync/<rtc-create-graph! "logseq_db_demo" false)]))
+               (p/then (fn [[defaulted explicit]]
+                         (is (= {:graph-id "graph-2"} defaulted explicit))
+                         (is (= [[:thread-api/db-sync-create-remote-graph "logseq_db_demo" true]
+                                 [:thread-api/db-sync-create-remote-graph "logseq_db_demo" false]]
                                 @worker-calls))
                          (finish-async-test! done)))
                (p/catch (fn [e]
@@ -150,8 +123,8 @@
   (async done
          (let [state-prev (state/get-state)
                worker-prev @state/*db-worker
-               error (ex-info "invalid-e2ee-password"
-                              {:code :db-sync/invalid-e2ee-password})
+               error (ex-info "graph key store unavailable"
+                              {:code :db-sync/graph-key-unavailable})
                continued-calls (atom [])
                capture (fn [promise]
                          (-> promise
@@ -173,10 +146,10 @@
                                                      (swap! continued-calls conj :start)
                                                      (p/resolved :ok))]
                  (p/all [(capture (db-sync/<rtc-create-graph! "logseq_db_demo" true))
-                         (capture (db-sync/<rtc-upload-graph! "logseq_db_demo" true))]))
+                         (capture (db-sync/<rtc-upload-graph! "logseq_db_demo"))]))
                (p/then (fn [results]
                          (is (= [:rejected :rejected] (mapv first results)))
-                         (is (every? #(= :db-sync/invalid-e2ee-password
+                         (is (every? #(= :db-sync/graph-key-unavailable
                                          (:code (ex-data (second %))))
                                      results))
                          (is (empty? @continued-calls))
@@ -340,8 +313,8 @@
                refresh-calls (atom 0)
                start-calls (atom [])
                upload-calls (atom [])]
-           (-> (p/with-redefs [db-sync/<rtc-create-graph! (fn [repo graph-e2ee? & [graph-ready-for-use?]]
-                                                            (swap! create-calls conj [repo graph-e2ee? graph-ready-for-use?])
+           (-> (p/with-redefs [db-sync/<rtc-create-graph! (fn [repo & [graph-ready-for-use?]]
+                                                            (swap! create-calls conj [repo graph-ready-for-use?])
                                                             (p/resolved "graph-4"))
                                db-sync/<get-remote-graphs (fn []
                                                             (swap! refresh-calls inc)
@@ -352,9 +325,9 @@
                                state/<invoke-db-worker (fn [& args]
                                                          (swap! upload-calls conj args)
                                                          (p/resolved :ok))]
-                 (db-sync/<rtc-create-graph-and-start-sync! "logseq_db_demo" true))
+                 (db-sync/<rtc-create-graph-and-start-sync! "logseq_db_demo"))
                (p/then (fn [_]
-                         (is (= [["logseq_db_demo" true true]] @create-calls))
+                         (is (= [["logseq_db_demo" true]] @create-calls))
                          (is (= 1 @refresh-calls))
                          (is (= ["logseq_db_demo"] @start-calls))
                          (is (empty? @upload-calls))
@@ -491,8 +464,7 @@
 (deftest get-remote-graphs-includes-ready-for-use-flag-test
   (async done
          (let [graphs-state (atom nil)
-               worker-prev @state/*db-worker
-               ensure-calls (atom [])]
+               worker-prev @state/*db-worker]
            (reset! state/*db-worker :worker)
            (-> (p/with-redefs [db-sync/http-base (fn [] "http://base")
                                user-handler/<ensure-id&access-token! (fn [] (p/resolved true))
@@ -503,13 +475,8 @@
                                                                            :graph-e2ee? true
                                                                            :graph-ready-for-use? false
                                                                            :created-at 1
-                                                                           :updated-at 2}]
-                                                                 :user-rsa-keys-exists? true}))
-                               state/<invoke-db-worker (fn [& args]
-                                                         (when (= :thread-api/db-sync-ensure-user-rsa-keys
-                                                                  (first args))
-                                                           (swap! ensure-calls conj args))
-                                                         (p/resolved :ok))
+                                                                           :updated-at 2}]}))
+                               state/<invoke-db-worker (fn [& _] (p/resolved :ok))
                                state/set-state! (fn [k v]
                                                   (when (= k :rtc/graphs)
                                                     (reset! graphs-state v))
@@ -519,81 +486,13 @@
                (p/then (fn [graphs]
                          (is (= false (:graph-ready-for-use? (first graphs))))
                          (is (= false (:graph-ready-for-use? (first @graphs-state))))
-                         (is (empty? @ensure-calls))
+                         (is (nil? (:graph-e2ee? (first graphs))))
                          (finish-async-test! done)))
                (p/catch (fn [error]
                           (is false (str error))
                           (finish-async-test! done)))
                (p/finally (fn []
                             (reset! state/*db-worker worker-prev)))))))
-
-(deftest get-remote-graphs-ensures-user-rsa-keys-when-server-missing-test
-  (async done
-         (let [worker-prev @state/*db-worker
-               ensure-calls (atom [])]
-           (reset! state/*db-worker :worker)
-           (-> (p/with-redefs [db-sync/http-base (fn [] "http://base")
-                               user-handler/<ensure-id&access-token! (fn [] (p/resolved true))
-                               db-sync/fetch-json (fn [_url _opts _schema]
-                                                    (p/resolved {:graphs []
-                                                                 :user-rsa-keys-exists? false}))
-                               state/<invoke-db-worker (fn [& args]
-                                                         (when (= :thread-api/db-sync-ensure-user-rsa-keys
-                                                                  (first args))
-                                                           (swap! ensure-calls conj args))
-                                                         (p/resolved {:public-key "pk"}))
-                               state/set-state! (fn [& _] nil)
-                               repo-handler/refresh-repos! (fn [] nil)]
-                 (db-sync/<get-remote-graphs))
-               (p/then (fn [_]
-                         (is (= [[:thread-api/db-sync-ensure-user-rsa-keys
-                                  {:ensure-server? true
-                                   :server-rsa-keys-exists? false}]]
-                                @ensure-calls))
-                         (finish-async-test! done)))
-               (p/catch (fn [error]
-                          (is false (str error))
-                          (finish-async-test! done)))
-               (p/finally (fn []
-                            (reset! state/*db-worker worker-prev)))))))
-
-(deftest get-remote-graphs-syncs-auth-before-ensuring-user-rsa-keys-test
-  (async done
-         (let [worker-prev @state/*db-worker
-               state-prev (state/get-state)
-               worker-calls (atom [])]
-           (reset! state/*db-worker :worker)
-           (state/swap-state! assoc
-                  :auth/id-token "id-token-1"
-                  :auth/access-token "access-token-1"
-                  :auth/refresh-token "refresh-token-1"
-                  :auth/oauth-token-url "http://oauth/token"
-                  :auth/oauth-client-id "client-1")
-           (-> (p/with-redefs [db-sync/http-base (fn [] "http://base")
-                               user-handler/<ensure-id&access-token! (fn []
-                                                                       (p/resolved true))
-                               db-sync/fetch-json (fn [_url _opts _schema]
-                                                    (p/resolved {:graphs []
-                                                                 :user-rsa-keys-exists? false}))
-                               state/<invoke-db-worker (fn [& args]
-                                                         (swap! worker-calls conj args)
-                                                         (p/resolved {:public-key "pk"}))
-                               state/set-state! (fn [& _] nil)
-                               repo-handler/refresh-repos! (fn [] nil)]
-                 (db-sync/<get-remote-graphs))
-               (p/then (fn [_]
-                         (is (= [:thread-api/sync-app-state
-                                  :thread-api/db-sync-ensure-user-rsa-keys]
-                                (mapv first @worker-calls)))
-                         (is (= "refresh-token-1"
-                                (:auth/refresh-token (second (first @worker-calls)))))
-                         (finish-async-test! done)))
-               (p/catch (fn [error]
-                          (is false (str error))
-                          (finish-async-test! done)))
-               (p/finally (fn []
-                            (reset! state/*db-worker worker-prev)
-                            (state/replace-state! state-prev)))))))
 
 (deftest rtc-download-graph-delegates-to-worker-download-api-test
   (async done
@@ -605,14 +504,13 @@
                                                          (p/resolved :ok))
                                state/set-state! (fn [& _] nil)
                                state/pub-event! (fn [& _] nil)]
-                 (db-sync/<rtc-download-graph! "demo-graph" "graph-1" false))
+                 (db-sync/<rtc-download-graph! "demo-graph" "graph-1"))
                (p/then (fn [_]
                          (is (= 1 (count @worker-calls)))
-                         (let [[op graph graph-uuid graph-e2ee?] (first @worker-calls)]
+                         (let [[op graph graph-uuid] (first @worker-calls)]
                            (is (= :thread-api/db-sync-download-graph-by-id op))
                            (is (string/ends-with? graph "demo-graph"))
-                           (is (= "graph-1" graph-uuid))
-                           (is (= false graph-e2ee?)))
+                           (is (= "graph-1" graph-uuid)))
                          (finish-async-test! done)))
                (p/catch (fn [error]
                           (is false (str error))

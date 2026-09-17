@@ -15,7 +15,6 @@
             [frontend.db.restore :as db-restore]
             [frontend.error :as error]
             [frontend.handler.command-palette :as command-palette]
-            [frontend.handler.e2ee]
             [frontend.handler.events :as events]
             [frontend.handler.events.export]
             [frontend.handler.events.rtc]

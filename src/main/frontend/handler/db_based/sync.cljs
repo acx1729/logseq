@@ -102,20 +102,9 @@
   (p/let [graph-uuid (state/<invoke-db-worker :thread-api/get-rtc-graph-uuid repo)]
     (some-> graph-uuid str)))
 
-(defn- <get-rtc-graph-e2ee?
-  [repo]
-  (state/<invoke-db-worker :thread-api/get-key-value repo :logseq.kv/graph-rtc-e2ee?))
-
 (defn- <ensure-invite-auth!
   []
   (user-handler/<ensure-id&access-token!))
-
-(defn- <grant-graph-access-for-invite!
-  [repo graph-uuid email]
-  (p/let [e2ee? (when repo (<get-rtc-graph-e2ee? repo))]
-    (when (and repo e2ee?)
-      (state/<invoke-db-worker :thread-api/db-sync-grant-graph-access
-                              repo graph-uuid email))))
 
 (defn- should-start-rtc?
   [repo]
@@ -123,12 +112,6 @@
        (let [graph (remote-graph repo)]
          (and (some? graph)
               (not= false (:graph-ready-for-use? graph))))))
-
-(defn- normalize-graph-e2ee?
-  [graph-e2ee?]
-  (if (nil? graph-e2ee?)
-    true
-    (true? graph-e2ee?)))
 
 (defn- active-graph-operation []
   (let [{:rtc/keys [downloading-graph-uuid uploading?]} (state/get-state)]
@@ -155,26 +138,6 @@
             _ (<sync-auth-state-to-db-worker!)]
       nil)
     (p/resolved nil)))
-
-(defn- <ensure-user-rsa-keys-on-server!
-  [{:keys [server-rsa-keys-exists?]}]
-  (if (not= false server-rsa-keys-exists?)
-    (p/resolved nil)
-    (if @state/*db-worker
-      (-> (p/let [_ (<sync-auth-state-to-db-worker!)]
-            (state/<invoke-db-worker :thread-api/db-sync-ensure-user-rsa-keys
-                                    {:ensure-server? true
-                                     :server-rsa-keys-exists? false}))
-          (p/catch (fn [error]
-                     (log/error :db-sync/ensure-user-rsa-keys-failed
-                                {:error error
-                                 :reason :server-rsa-keys-missing})
-                     nil)))
-      (do
-        (log/warn :db-sync/ensure-user-rsa-keys-skipped
-                  {:reason :db-worker-not-ready
-                   :server-rsa-keys-exists? server-rsa-keys-exists?})
-        (p/resolved nil)))))
 
 (defn- <wait-for-db-worker-ready!
   []
@@ -283,12 +246,10 @@
 
 (defn <rtc-create-graph!
   ([repo]
-   (<rtc-create-graph! repo true true))
-  ([repo graph-e2ee?]
-   (<rtc-create-graph! repo graph-e2ee? true))
-  ([repo graph-e2ee? graph-ready-for-use?]
+   (<rtc-create-graph! repo true))
+  ([repo graph-ready-for-use?]
    (state/<invoke-db-worker :thread-api/db-sync-create-remote-graph
-                           repo graph-e2ee? graph-ready-for-use?)))
+                           repo graph-ready-for-use?)))
 
 (defn <rtc-delete-graph!
   [graph-uuid _schema-version]
@@ -304,39 +265,36 @@
                             :base base})))))
 
 (defn <rtc-download-graph!
-  ([graph-name graph-uuid]
-   (<rtc-download-graph! graph-name graph-uuid true))
-  ([graph-name graph-uuid graph-e2ee?]
-   (if-let [operation (active-graph-operation)]
-     (reject-graph-operation-in-progress :download operation)
-     (do
-       (state/set-state! :rtc/downloading-graph-uuid graph-uuid)
-       (state/pub-event!
-        [:rtc/log {:type :rtc.log/download
-                   :sub-type :download-progress
-                   :graph-uuid graph-uuid
-                   :message "Preparing graph snapshot download"}])
-       (let [graph-e2ee? (normalize-graph-e2ee? graph-e2ee?)
-             base (http-base)]
-         (-> (if (and graph-uuid base)
-               (p/let [_ (user-handler/<ensure-id&access-token!)
-                       graph (str config/db-version-prefix graph-name)
-                       _ (<ensure-download-runtime-bound! graph)
-                       _ (state/<invoke-db-worker :thread-api/db-sync-download-graph-by-id
-                                                 graph graph-uuid graph-e2ee?)
-                       _ (when (util/electron?)
-                           (state/<invoke-db-worker :thread-api/db-sync-download-missing-assets
-                                                   graph graph-uuid))]
-                 true)
-               (p/rejected (ex-info "db-sync missing graph info"
-                                    {:type :db-sync/invalid-graph
-                                     :graph-uuid graph-uuid
-                                     :base base})))
-             (p/catch (fn [error]
-                        (throw error)))
-             (p/finally
-               (fn []
-                 (state/set-state! :rtc/downloading-graph-uuid nil)))))))))
+  [graph-name graph-uuid]
+  (if-let [operation (active-graph-operation)]
+    (reject-graph-operation-in-progress :download operation)
+    (do
+      (state/set-state! :rtc/downloading-graph-uuid graph-uuid)
+      (state/pub-event!
+       [:rtc/log {:type :rtc.log/download
+                  :sub-type :download-progress
+                  :graph-uuid graph-uuid
+                  :message "Preparing graph snapshot download"}])
+      (let [base (http-base)]
+        (-> (if (and graph-uuid base)
+              (p/let [_ (user-handler/<ensure-id&access-token!)
+                      graph (str config/db-version-prefix graph-name)
+                      _ (<ensure-download-runtime-bound! graph)
+                      _ (state/<invoke-db-worker :thread-api/db-sync-download-graph-by-id
+                                                graph graph-uuid)
+                      _ (when (util/electron?)
+                          (state/<invoke-db-worker :thread-api/db-sync-download-missing-assets
+                                                  graph graph-uuid))]
+                true)
+              (p/rejected (ex-info "db-sync missing graph info"
+                                   {:type :db-sync/invalid-graph
+                                    :graph-uuid graph-uuid
+                                    :base base})))
+            (p/catch (fn [error]
+                       (throw error)))
+            (p/finally
+              (fn []
+                (state/set-state! :rtc/downloading-graph-uuid nil))))))))
 
 (defn <get-remote-graphs
   []
@@ -348,25 +306,19 @@
                   resp (fetch-json (str base "/graphs")
                                    {:method "GET"}
                                    {:response-schema :graphs/list})
-                  _ (<ensure-user-rsa-keys-on-server! {:server-rsa-keys-exists?
-                                                       (:user-rsa-keys-exists? resp)})
                   graphs (:graphs resp)
                   result (mapv (fn [graph]
-                                 (let [graph-e2ee? (if (contains? graph :graph-e2ee?)
-                                                     (normalize-graph-e2ee? (:graph-e2ee? graph))
-                                                     true)
-                                       graph-ready-for-use? (not= false (:graph-ready-for-use? graph))]
+                                 (let [graph-ready-for-use? (not= false (:graph-ready-for-use? graph))]
                                    (merge
                                     {:url (str config/db-version-prefix (:graph-name graph))
                                      :GraphName (:graph-name graph)
                                      :GraphSchemaVersion (:schema-version graph)
                                      :GraphUUID (:graph-id graph)
                                      :rtc-graph? true
-                                     :graph-e2ee? graph-e2ee?
                                      :graph-ready-for-use? graph-ready-for-use?
                                      :graph<->user-user-type (:role graph)
                                      :graph<->user-grant-by-user (:invited-by graph)}
-                                    (dissoc graph :graph-id :graph-name :schema-version :role :invited-by :graph-ready-for-use?))))
+                                    (dissoc graph :graph-id :graph-name :schema-version :role :invited-by :graph-ready-for-use? :graph-e2ee?))))
                                graphs)]
             (state/set-state! :rtc/graphs result)
             (repo-handler/refresh-repos!)
@@ -394,8 +346,6 @@
                               :headers {"content-type" "application/json"}
                               :body (js/JSON.stringify (clj->js body))}
                              {:response-schema :graph-members/create})
-               repo (state/get-current-repo)
-               _ (<grant-graph-access-for-invite! repo graph-uuid email)
                _ (<rtc-get-users-info true)]
          (notification/show! (t :sync/invitation-sent) :success))
        (p/catch (fn [e]
@@ -438,7 +388,7 @@
                           :graph-uuid graph-uuid}))))
 
 (defn <rtc-upload-graph!
-  [repo _graph-e2ee?]
+  [repo]
   (if-let [operation (active-graph-operation)]
     (reject-graph-operation-in-progress :upload operation)
     (do
@@ -454,8 +404,8 @@
               (state/set-state! :rtc/uploading? false)))))))
 
 (defn <rtc-create-graph-and-start-sync!
-  [repo graph-e2ee?]
-  (p/let [graph-id (<rtc-create-graph! repo graph-e2ee? true)]
+  [repo]
+  (p/let [graph-id (<rtc-create-graph! repo true)]
     (when (nil? graph-id)
       (throw (ex-info "graph id doesn't exist when creating remote graph" {:repo repo})))
     (p/do!

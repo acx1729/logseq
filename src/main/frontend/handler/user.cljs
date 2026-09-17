@@ -24,21 +24,15 @@
 
 ;;; userinfo, token, login/logout, ...
 
-(defn- decode-username
-  [username]
-  (let [arr (new js/Uint8Array (count username))]
-    (doseq [i (range (count username))]
-      (aset arr i (.charCodeAt username i)))
-    (.decode (new js/TextDecoder "utf-8") arr)))
-
-(defn parse-jwt [jwt]
+(defn parse-jwt
+  "The claims of a JWT as a map; the signature is checked by the server."
+  [jwt]
   (some-> jwt
           (string/split ".")
           second
           (#(base64/decodeString % true))
           js/JSON.parse
-          (js->clj :keywordize-keys true)
-          (update :cognito:username decode-username)))
+          (js->clj :keywordize-keys true)))
 
 (defn- parse-jwt-safe
   [jwt]
@@ -76,7 +70,7 @@
   (some->
    (state/get-auth-id-token)
    parse-jwt
-   :cognito:username))
+   :username))
 
 (defn user-uuid []
   (some->
@@ -271,14 +265,6 @@
   (auto-fill-refresh-token-from-cognito!)
   (state/pub-event! [:user/fetch-info-and-graphs]))
 
-(defn- clear-e2ee-password!
-  []
-  (when @state/*db-worker
-    (-> (state/<invoke-db-worker :thread-api/clear-e2ee-password)
-        (p/catch (fn [error]
-                   (js/console.warn :clear-e2ee-password-failed error)
-                   nil)))))
-
 (defn ^:export login-with-username-password-e2e
   [username' password client-id client-secret]
   (let [text-encoder (new js/TextEncoder)
@@ -306,7 +292,6 @@
           {:id-token id-token :access-token access-token :refresh-token refresh-token})))))
 
 (defn logout []
-  (clear-e2ee-password!)
   (clear-tokens)
   (.clear js/localStorage)
   (state/clear-user-info!)

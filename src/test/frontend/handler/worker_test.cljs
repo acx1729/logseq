@@ -73,14 +73,14 @@
                            (p/resolved {:ok true}))]
       (with-redefs [worker-handler/<db-worker-ui-action
                     (fn [_action _payload]
-                      (p/resolved {:password "pw"}))]
+                      (p/resolved {:ok true}))]
         (-> (worker-handler/handle :db-worker/ui-request
                                    wrapped-worker
                                    {:request-id "req-1"
-                                    :action :request-e2ee-password
-                                    :payload {:reason :decrypt-user-rsa-private-key}})
+                                    :action :read-import-file
+                                    :payload {:path "/tmp/import.zip"}})
             (p/then (fn [_]
-                      (is (= [[:thread-api/resolve-ui-request ["req-1" {:password "pw"}]]]
+                      (is (= [[:thread-api/resolve-ui-request ["req-1" {:ok true}]]]
                              @calls))
                       (done)))
             (p/catch (fn [error]
@@ -99,8 +99,8 @@
         (-> (worker-handler/handle :db-worker/ui-request
                                    wrapped-worker
                                    {:request-id "req-2"
-                                    :action :request-e2ee-password
-                                    :payload {:reason :decrypt-user-rsa-private-key}})
+                                    :action :read-import-file
+                                    :payload {:path "/tmp/import.zip"}})
             (p/then (fn [_]
                       (is (= [[:thread-api/reject-ui-request
                                ["req-2"

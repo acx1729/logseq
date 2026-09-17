@@ -148,7 +148,7 @@
         (t :graph/leave-confirm-desc))))))
 
 (defn- native-graph-item
-  [repos downloading-graph-id {:keys [url root remote? graph-e2ee?
+  [repos downloading-graph-id {:keys [url root remote?
                                       GraphName GraphSchemaVersion GraphUUID
                                       graph-ready-for-use? created-at last-seen-at]
                                :as graph}]
@@ -164,7 +164,7 @@
        :local (boolean root)
        :readyForUse (not= false graph-ready-for-use?)
        :downloading (boolean downloading?)
-       :e2ee (boolean graph-e2ee?)
+       :e2ee (boolean remote?)
        :graphName GraphName
        :graphUUID GraphUUID
        :graphSchemaVersion GraphSchemaVersion

@@ -3,9 +3,7 @@
   (:require [cljs-bean.core :as bean]
             [clojure.string :as string]
             [frontend.common.thread-api :as thread-api]
-            [frontend.common.crypt :as crypt]
             [frontend.context.i18n :as i18n]
-            [frontend.handler.e2ee :as e2ee-handler]
             [frontend.handler.file-graph-import :as file-graph-import]
             [frontend.handler.notification :as notification]
             [frontend.state :as state]
@@ -110,54 +108,6 @@
 (defn- <db-worker-ui-action
   [action payload]
   (case action
-    :request-e2ee-password
-    (p/let [password-promise (state/pub-event! [:rtc/request-e2ee-password payload])
-            password password-promise]
-      {:password password})
-
-    :decrypt-user-e2ee-private-key
-    (let [encrypted-private-key (:encrypted-private-key payload)]
-      (p/let [private-key-promise (state/pub-event! [:rtc/decrypt-user-e2ee-private-key encrypted-private-key])
-              private-key private-key-promise]
-        (crypt/<export-private-key private-key)))
-
-    :native-save-e2ee-password
-    (let [{:keys [key encrypted-text]} payload]
-      (if-not (and (string? key) (string? encrypted-text))
-        (p/rejected (ex-info "invalid native-save-e2ee-password payload"
-                             {:code :invalid-ui-action-payload
-                              :action action
-                              :payload payload}))
-        (if-not (e2ee-handler/native-storage-supported?)
-          (p/resolved {:supported? false})
-          (p/let [_ (e2ee-handler/<native-save-secret! key encrypted-text)]
-            {:supported? true}))))
-
-    :native-get-e2ee-password
-    (let [{:keys [key]} payload]
-      (if-not (string? key)
-        (p/rejected (ex-info "invalid native-get-e2ee-password payload"
-                             {:code :invalid-ui-action-payload
-                              :action action
-                              :payload payload}))
-        (if-not (e2ee-handler/native-storage-supported?)
-          (p/resolved {:supported? false})
-          (p/let [encrypted-text (e2ee-handler/<native-get-secret key)]
-            {:supported? true
-             :encrypted-text encrypted-text}))))
-
-    :native-delete-e2ee-password
-    (let [{:keys [key]} payload]
-      (if-not (string? key)
-        (p/rejected (ex-info "invalid native-delete-e2ee-password payload"
-                             {:code :invalid-ui-action-payload
-                              :action action
-                              :payload payload}))
-        (if-not (e2ee-handler/native-storage-supported?)
-          (p/resolved {:supported? false})
-          (p/let [_ (e2ee-handler/<native-delete-secret! key)]
-            {:supported? true}))))
-
     :read-import-file
     (let [path (:path payload)]
       (if-not (string? path)

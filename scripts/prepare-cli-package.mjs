@@ -72,7 +72,6 @@ const dependencyNames = [
   "better-sqlite3",
   "fs-extra",
   "jszip",
-  "keytar",
   "mldoc",
   "picocolors",
   "string-width",

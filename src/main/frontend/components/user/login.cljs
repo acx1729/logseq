@@ -146,7 +146,7 @@
         [:br]
         [:span.opacity-50 (str (t :account/or) " ")]]
        [:a.text-sm.opacity-60.hover:opacity-80.underline {:on-click #(set-current-tab! :reset-password)}
-        (t :encryption/forgot-password-question)]]]]))
+        (t :account/forgot-password-question)]]]]))
 
 (hsx/defc signup-form
   [{:keys [set-current-tab! set-error!]}]

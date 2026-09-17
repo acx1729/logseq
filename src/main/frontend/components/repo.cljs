@@ -4,7 +4,6 @@
             [frontend.config :as config]
             [frontend.context.i18n :as i18n :refer [t]]
             [frontend.handler.db-based.sync :as rtc-handler]
-            [frontend.handler.events.rtc-error :as rtc-error]
             [frontend.handler.graph :as graph]
             [frontend.handler.notification :as notification]
             [frontend.handler.repo :as repo-handler]
@@ -26,9 +25,10 @@
             [io.factorhouse.hsx.core :as hsx]))
 
 (defn graph-sync-icon-name
-  [{:keys [remote? graph-e2ee?]}]
+  "Every remote graph is encrypted, so the icon is the lock."
+  [{:keys [remote?]}]
   (when remote?
-    (if graph-e2ee? "lock" "cloud")))
+    "lock"))
 
 (defn- repo-display-name
   [repo-url]
@@ -52,22 +52,7 @@
 
 (defn- handle-cloud-graph-error!
   [error]
-  (log/error :db-sync/cloud-graph-failed error)
-  (when (rtc-error/e2ee-decrypt-failed? error)
-    (notification/show! (t :encryption/wrong-password) :error false)))
-
-(defn- graph-e2ee-enabled?
-  [{:keys [url graph-e2ee?] :as graph}]
-  (cond
-    (contains? graph :graph-e2ee?)
-    (p/resolved (true? graph-e2ee?))
-
-    (= url (state/get-current-repo))
-    (p/let [e2ee? (<invoke-db-worker :thread-api/get-key-value url :logseq.kv/graph-rtc-e2ee?)]
-      (if (nil? e2ee?) true (true? e2ee?)))
-
-    :else
-    (p/resolved true)))
+  (log/error :db-sync/cloud-graph-failed error))
 
 (defn- <ensure-current-graph-for-upload!
   [repo]
@@ -85,8 +70,7 @@
          dialog-config)
         (p/then
          (fn []
-           (p/let [_ (<ensure-current-graph-for-upload! url)
-                   graph-e2ee? (graph-e2ee-enabled? graph)]
+           (p/let [_ (<ensure-current-graph-for-upload! url)]
              (let [mobile? (util/mobile?)
                    hide-upload-log! (fn []
                                       (when mobile?
@@ -98,7 +82,7 @@
                                   {:id :rtc-graph-upload-log}))
               (rtc-indicator/on-upload-finished-task
                hide-upload-log!)
-              (-> (rtc-handler/<rtc-upload-graph! url graph-e2ee?)
+              (-> (rtc-handler/<rtc-upload-graph! url)
                   (p/catch (fn [error]
                              (handle-cloud-graph-error! error)
                              (p/rejected error)))
@@ -186,7 +170,7 @@
 (hsx/defc ^:large-vars/cleanup-todo repos-inner
   "Graph list in `All graphs` page"
   [repos]
-  (for [{:keys [root url remote? graph-e2ee? GraphUUID GraphSchemaVersion GraphName created-at last-seen-at] :as repo}
+  (for [{:keys [root url remote? GraphUUID GraphSchemaVersion GraphName created-at last-seen-at] :as repo}
         (sort-repos-with-metadata-local repos)
         :let [graph-name (config/db-graph-name url)]]
     [:div.flex.justify-between.mb-2.items-center.group {:key (or url GraphUUID)
@@ -201,7 +185,7 @@
                                      (state/pub-event! [:graph/switch url])
 
                                      remote?
-                                     (state/pub-event! [:rtc/download-remote-graph GraphName GraphUUID GraphSchemaVersion graph-e2ee?])
+                                     (state/pub-event! [:rtc/download-remote-graph GraphName GraphUUID GraphSchemaVersion])
 
                                      :else
                                      nil))))]
@@ -376,7 +360,7 @@
   (let [switch-repos (if-not (nil? current-repo)
                        (remove (fn [repo] (= current-repo (:url repo))) repos) repos) ; exclude current repo
         repo-links (mapv
-                    (fn [{:keys [url remote? graph-e2ee? rtc-graph? GraphName GraphSchemaVersion GraphUUID graph-ready-for-use?] :as graph}]
+                    (fn [{:keys [url remote? rtc-graph? GraphName GraphSchemaVersion GraphUUID graph-ready-for-use?] :as graph}]
                       (let [repo-url url
                             short-repo-name (text-util/get-graph-name-from-path repo-url)
                             downloading? (and downloading-graph-id (= GraphUUID downloading-graph-id))
@@ -386,7 +370,7 @@
                           {:title [:span.flex.items-center.title-wrap short-repo-name
                                    (when remote? [:span.pl-1.flex.items-center
                                                   {:title title}
-                                                  (ui/icon (if graph-e2ee? "lock" "cloud") {:size 18})
+                                                  (ui/icon "lock" {:size 18})
                                                   (when-not ready-for-use?
                                                     [:span.opacity.text-sm.pl-1 (t :graph/preparing)])
                                                   (when downloading?
@@ -412,7 +396,7 @@
 
                                              (and rtc-graph? remote?)
                                              (state/pub-event!
-                                              [:rtc/download-remote-graph GraphName GraphUUID GraphSchemaVersion graph-e2ee?])
+                                              [:rtc/download-remote-graph GraphName GraphUUID GraphSchemaVersion])
 
                                              :else
                                              nil))))}})))
@@ -623,28 +607,10 @@
       (string/includes? graph-name "+")
       (string/includes? graph-name "/")))
 
-(defn ensure-e2ee-rsa-key-for-cloud!
-  [{:keys [cloud? graph-e2ee? refresh-token token user-uuid e2ee-rsa-key-ensured?]} set-e2ee-rsa-key-ensured?]
-  (if (and cloud? graph-e2ee? refresh-token token user-uuid (not e2ee-rsa-key-ensured?))
-    (-> (p/do!
-         (state/pub-event! [:rtc/sync-app-state])
-         (<invoke-db-worker :thread-api/set-db-sync-config
-                            {:enabled? true
-                             :ws-url (config/db-sync-ws-url)
-                             :http-base (config/db-sync-http-base)})
-         (p/let [rsa-key-pair (<invoke-db-worker :thread-api/db-sync-ensure-user-rsa-keys)]
-           (set-e2ee-rsa-key-ensured? (some? rsa-key-pair))))
-        (p/catch (fn [e]
-                   (log/error :db-sync/ensure-user-rsa-keys-failed e)
-                   e)))
-    (p/resolved nil)))
-
 (hsx/defc new-db-graph-inner
   [rtc-group?]
   (let [[creating-db? set-creating-db?] (hooks/use-state false)
         [cloud? set-cloud?] (hooks/use-state false)
-        [graph-e2ee? set-graph-e2ee?] (hooks/use-state true)
-        [e2ee-rsa-key-ensured? set-e2ee-rsa-key-ensured?] (hooks/use-state nil)
         input-ref (hooks/create-ref)
         new-db-f (fn new-db-f
                    [graph-name]
@@ -659,7 +625,7 @@
                            (when cloud?
                              (->
                               (p/do
-                                (rtc-handler/<rtc-create-graph-and-start-sync! repo graph-e2ee?))
+                                (rtc-handler/<rtc-create-graph-and-start-sync! repo))
                               (p/catch handle-cloud-graph-error!)
                               (p/finally (fn []
                                            (set-creating-db? false)))))
@@ -675,21 +641,6 @@
          (js/setTimeout #(.focus input) 32)))
      [])
 
-    (hooks/use-effect!
-     (fn []
-       (let [token (state/get-auth-id-token)
-             user-uuid (user-handler/user-uuid)
-             refresh-token (state/get-auth-refresh-token)]
-         (ensure-e2ee-rsa-key-for-cloud!
-          {:cloud? cloud?
-           :graph-e2ee? graph-e2ee?
-           :refresh-token refresh-token
-           :token token
-           :user-uuid user-uuid
-           :e2ee-rsa-key-ensured? e2ee-rsa-key-ensured?}
-          set-e2ee-rsa-key-ensured?)))
-     [cloud? graph-e2ee?])
-
     [:div.new-graph.flex.flex-col.gap-4.p-1.pt-2
      (shui/input
       {:disabled creating-db?
@@ -698,32 +649,19 @@
        :on-key-down submit!
        :autoComplete "off"})
      (when rtc-group?
-       [:div.flex.flex-col
-        [:div.flex.flex-row.items-center.gap-1
-         (shui/checkbox
-          {:id "rtc-sync"
-           :checked cloud?
-           :on-checked-change
-           (fn []
-             (let [v (not cloud?)]
-               (set-cloud? v)))})
-         [:label.opacity-70.text-sm
-          {:for "rtc-sync"}
-          (t :graph/use-sync-label)]
-         (when cloud?
-           [:div.flex.flex-row.items-center.gap-1.ml-3
-            (shui/checkbox
-             {:id "rtc-graph-e2ee"
-              :checked graph-e2ee?
-              :on-checked-change
-              (fn []
-                (set-graph-e2ee? (not graph-e2ee?)))})
-            [:label.opacity-70.text-sm
-             {:for "rtc-graph-e2ee"}
-             (t :graph/encrypt-data-label)]])]])
+       [:div.flex.flex-row.items-center.gap-1
+        (shui/checkbox
+         {:id "rtc-sync"
+          :checked cloud?
+          :on-checked-change
+          (fn []
+            (let [v (not cloud?)]
+              (set-cloud? v)))})
+        [:label.opacity-70.text-sm
+         {:for "rtc-sync"}
+         (t :graph/use-sync-label)]])
      (shui/button
-      {:disabled (and cloud? graph-e2ee? (not e2ee-rsa-key-ensured?))
-       :on-click #(submit! % true)
+      {:on-click #(submit! % true)
        :on-key-down submit!}
       (if creating-db?
         (ui/loading (t :graph/creating))

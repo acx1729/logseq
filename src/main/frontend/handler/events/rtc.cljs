@@ -1,62 +1,13 @@
 (ns frontend.handler.events.rtc
   "RTC events"
   (:require-macros [frontend.handler.events.macros :refer [defevent!]])
-  (:require [frontend.common.crypt :as crypt]
-            [frontend.components.e2ee :as e2ee]
-            [frontend.config :as config]
+  (:require [frontend.config :as config]
             [frontend.context.i18n :refer [t]]
             [frontend.flows :as flows]
             [frontend.handler.events :as events]
             [frontend.handler.notification :as notification]
             [frontend.state :as state]
-            [lambdaisland.glogi :as log]
-            [logseq.shui.ui :as shui]
             [promesa.core :as p]))
-
-(defn- rtc-collaborators-dialog?
-  []
-  (= :rtc-collaborators (state/get-dialog-id)))
-
-(defn- close-e2ee-blocking-ui!
-  []
-  (when-not (rtc-collaborators-dialog?)
-    (shui/dialog-close-all!))
-  (shui/popup-hide! :download-rtc-graph))
-
-(defevent! :rtc/decrypt-user-e2ee-private-key [[_ encrypted-private-key]]
-  (let [private-key-promise (p/deferred)
-        refresh-token (str (state/get-auth-refresh-token))]
-    (close-e2ee-blocking-ui!)
-    (->
-     (p/let [{:keys [password]} (state/<invoke-db-worker :thread-api/get-e2ee-password refresh-token)
-             private-key (crypt/<decrypt-private-key password encrypted-private-key)]
-       (p/resolve! private-key-promise private-key))
-     (p/catch
-      (fn [error]
-        (log/error :read-e2ee-password-failed error)
-        (shui/dialog-open!
-         #(e2ee/e2ee-password-to-decrypt-private-key encrypted-private-key private-key-promise)
-         {:auto-width? true
-          :content-props {:onPointerDownOutside #(.preventDefault %)}
-          :on-close (fn []
-                      (p/reject! private-key-promise (ex-info "input E2EE password cancelled" {}))
-                      (shui/dialog-close!))}))))
-    private-key-promise))
-
-(defevent! :rtc/request-e2ee-password [[_ {:keys [reason]}]]
-  (let [password-promise (p/deferred)
-        decrypt-reason? (= :decrypt-user-rsa-private-key reason)]
-    (close-e2ee-blocking-ui!)
-    (shui/dialog-open!
-     #(if decrypt-reason?
-        (e2ee/e2ee-request-password password-promise)
-        (e2ee/e2ee-request-new-password password-promise))
-     {:auto-width? true
-      :content-props {:onPointerDownOutside #(.preventDefault %)}
-      :on-close (fn []
-                  (p/reject! password-promise (ex-info "cancelled" {}))
-                  (shui/dialog-close!))})
-    password-promise))
 
 (defevent! :rtc/storage-exceed-limit [[_]]
   (notification/show! (t :sync/storage-exceed-limit) :warning false))

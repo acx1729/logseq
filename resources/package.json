@@ -37,7 +37,6 @@
     "fastify": "5.8.2",
     "fs-extra": "^11.3.4",
     "https-proxy-agent": "7.0.6",
-    "keytar": "^7.9.0",
     "mldoc": "^1.5.9",
     "node-fetch": "3.3.2",
     "open": "11.0.0",
@@ -70,8 +69,7 @@
     "onlyBuiltDependencies": [
       "@zvec/zvec",
       "electron",
-      "electron-winstaller",
-      "keytar"
+      "electron-winstaller"
     ]
   }
 }

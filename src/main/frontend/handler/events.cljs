@@ -22,7 +22,6 @@
             [frontend.handler.db-based.rtc-flows :as rtc-flows]
             [frontend.handler.db-based.sync :as rtc-handler]
             [frontend.handler.editor :as editor-handler]
-            [frontend.handler.events.rtc-error :as rtc-error]
             [frontend.handler.export :as export]
             [frontend.handler.graph :as graph-handler]
             [frontend.handler.notification :as notification]
@@ -463,7 +462,7 @@
    (notification/show! (t :graph/removed-from-sync) :warning false)
    (rtc-handler/<get-remote-graphs)))
 
-(defevent! :rtc/download-remote-graph [[_ graph-name graph-uuid graph-schema-version graph-e2ee?]]
+(defevent! :rtc/download-remote-graph [[_ graph-name graph-uuid graph-schema-version]]
   (assert (= (:major (db-schema/parse-schema-version db-schema/version))
              (:major (db-schema/parse-schema-version graph-schema-version)))
           {:app db-schema/version
@@ -472,7 +471,7 @@
    (p/do!
     (when (util/mobile?)
       (download-progress/show! graph-name))
-    (rtc-handler/<rtc-download-graph! graph-name graph-uuid graph-e2ee?)
+    (rtc-handler/<rtc-download-graph! graph-name graph-uuid)
     (rtc-handler/<get-remote-graphs)
     (state/pub-event! [:graph/switch (str config/db-version-prefix graph-name) {:rtc-download? true}])
     (when (util/mobile?)
@@ -481,9 +480,7 @@
               (println "RTC download graph failed, error:")
               (log/error :rtc-download-graph-failed e)
               (when (util/mobile?)
-                (download-progress/hide!))
-              (when (rtc-error/e2ee-decrypt-failed? e)
-                (notification/show! (t :encryption/wrong-password) :error false))))))
+                (download-progress/hide!))))))
 
 ;; db-worker -> UI
 (defevent! :db/sync-changes [[_ data]]

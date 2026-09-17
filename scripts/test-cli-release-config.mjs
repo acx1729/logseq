@@ -96,7 +96,6 @@ assert.match(buildWorkflow, /pnpm cli:release/, "db graph workflow should build 
 assertNotContains(buildWorkflow, "clojure -M:cljs release logseq-cli", "db graph workflow");
 assert.match(buildWorkflow, /pnpm db-worker-node:release:bundle/, "db graph workflow should build release db-worker-node runtime");
 assert.match(buildWorkflow, /pnpm --dir dist\/cli-package install --prod --ignore-workspace/, "db graph workflow should install prepared CLI package dependencies");
-assert.match(buildWorkflow, /libsecret-1-0/, "db graph workflow should install keytar's Linux runtime dependency");
 assert.match(buildWorkflow, /pnpm --dir dist\/cli-package pack --pack-destination \.\.\//, "db graph workflow should verify the prepared CLI package with pnpm pack");
 assertNotContains(buildWorkflow, "create_graph_with_schema_org.cljs ./cli-root/graphs/schema-graph --subset", "db graph workflow");
 assert.match(buildWorkflow, /node dist\/cli-package\/dist\/logseq\.js --root-dir scripts\/cli-root/, "db graph workflow should test packaged CLI");
@@ -459,7 +458,6 @@ assert.equal(packageJson.private, undefined);
 assert.equal(packageJson.dependencies?.["@modelcontextprotocol/sdk"], undefined);
 assert.equal(packageJson.dependencies?.zod, undefined);
 assert.ok(packageJson.dependencies?.["@js-joda/core"], "publish package should include @js-joda/core for release artifacts");
-assert.ok(packageJson.dependencies?.keytar, "publish package should include keytar for db-worker-node");
 assert.ok(packageJson.dependencies?.["string-width"], "publish package should include string-width for CLI rendering");
 for (const dependencyName of zvecOptionalRuntimeDependencies) {
   assert.equal(
@@ -475,7 +473,6 @@ for (const dependencyName of zvecOptionalRuntimeDependencies) {
 assert.deepEqual(packageJson.pnpm?.onlyBuiltDependencies, [
   "@zvec/zvec",
   "better-sqlite3",
-  "keytar",
 ]);
 assert.deepEqual(packageJson.files, [
   "dist/logseq.js",

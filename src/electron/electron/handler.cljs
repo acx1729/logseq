@@ -23,7 +23,6 @@
             [electron.graph-switch-flow :as graph-switch-flow]
             [electron.handler-interface :refer [handle]]
             [electron.i18n :as i18n]
-            [electron.keychain :as keychain]
             [electron.logger :as logger]
             [electron.plugin :as plugin]
             [electron.server :as server]
@@ -568,15 +567,6 @@
 
 (defmethod handle :theme-loaded [^js win]
   (.manage (windowStateKeeper) win))
-
-(defmethod handle :keychain/save-e2ee-password [_window [_ key encrypted-text]]
-  (keychain/<set-password! key encrypted-text))
-
-(defmethod handle :keychain/get-e2ee-password [_window [_ key]]
-  (keychain/<get-password key))
-
-(defmethod handle :keychain/delete-e2ee-password [_window [_ key]]
-  (keychain/<delete-password! key))
 
 (defmethod handle :default [args]
   (logger/error "Error: no ipc handler for:" args))

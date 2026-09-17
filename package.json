@@ -120,7 +120,6 @@
   },
   "dependencies": {
     "@logseq/graph-lifecycle": "file:deps/graph-lifecycle",
-    "@aparajita/capacitor-secure-storage": "^8.0.0",
     "@base-ui/react": "^1.5.0",
     "@capacitor-community/safe-area": "8.0.1",
     "@capacitor/action-sheet": "^8.1.1",
@@ -172,7 +171,6 @@
     "interactjs": "^1.10.27",
     "jszip": "3.10.1",
     "katex": "^0.16.45",
-    "keytar": "^7.9.0",
     "marked": "^17.0.6",
     "mldoc": "^1.5.9",
     "path": "0.12.7",
@@ -218,8 +216,7 @@
     "onlyBuiltDependencies": [
       "@zvec/zvec",
       "better-sqlite3",
-      "electron",
-      "keytar"
+      "electron"
     ]
   }
 }

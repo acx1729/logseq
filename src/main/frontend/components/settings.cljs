@@ -1277,138 +1277,6 @@
   [:div.panel-wrap.is-collaboration.mb-8
    (settings-rtc-members)])
 
-(hsx/defc forgot-password
-  [token refresh-token user-uuid]
-  (let [[new-password set-new-password!] (hooks/use-state "")
-        [force-reset-status set-force-reset-status!] (hooks/use-state nil)
-        <force-reset-password-fn
-        (fn []
-          (-> (p/do!
-               (set-force-reset-status! (t :encryption/force-resetting-password))
-               (state/<invoke-db-worker :thread-api/reset-user-rsa-key-pair
-                                        token refresh-token user-uuid new-password)
-               (set-force-reset-status! (t :encryption/force-reset-password-successfully)))
-              (p/catch (fn [e]
-                         (log/error :forgot-password e)
-                         (set-force-reset-status! (t :encryption/failed-to-force-reset-password))))))]
-    [:div.flex.flex-col.gap-4
-     [:p
-      (t :encryption/forgot-password-warning)]
-     [:label.opacity-70 {:for "new-password"} (t :encryption/set-new-password)]
-     (shui/toggle-password
-      {:id "new-password"
-       :value new-password
-       :on-change #(set-new-password! (util/evalue %))})
-     (when force-reset-status [:p force-reset-status])
-     (shui/button
-      {:on-click <force-reset-password-fn
-       :disabled (string/blank? new-password)}
-      (t :encryption/force-reset-password))]))
-
-(hsx/defc reset-encryption-password
-  [current-password new-password {:keys [set-new-password!
-                                         set-current-password!
-                                         reset-password-status
-                                         on-click forgot? set-forgot!
-                                         token refresh-token user-uuid]}]
-  (let [[reset? set-reset!] (hooks/use-state false)]
-    (cond
-      forgot?
-      (forgot-password token refresh-token user-uuid)
-      reset?
-      [:div.flex.flex-col.gap-4
-       [:label.opacity-70 {:for "current-password"} (t :encryption/current-password)]
-       (shui/toggle-password
-        {:id "current-password"
-         :value current-password
-         :on-change #(set-current-password! (util/evalue %))})
-       [:label.opacity-70 {:for "new-password"} (t :encryption/set-new-password)]
-       (shui/toggle-password
-        {:id "new-password"
-         :value new-password
-         :on-change #(set-new-password! (util/evalue %))})
-       (when reset-password-status [:p reset-password-status])
-       (shui/button
-        {:on-click on-click
-         :disabled (string/blank? new-password)}
-        (t :encryption/reset-password))
-       [:a.opacity-70.hover:opacity-100 {:on-click #(set-forgot! true)}
-        (t :encryption/forgot-password-question)]]
-      :else
-      [:a.opacity-70.hover:opacity-100 {:on-click #(set-reset! true)}
-       (t :encryption/reset-password)])))
-
-(hsx/defc encryption
-  []
-  (let [user-uuid (user-handler/user-uuid)
-        token (state/get-auth-id-token)
-        refresh-token (str (state/get-auth-refresh-token))
-        [rsa-key-pair set-rsa-key-pair!] (hooks/use-state :not-inited)
-        [init-key-err set-init-key-err!] (hooks/use-state nil)
-        [get-key-err set-get-key-err!] (hooks/use-state nil)
-        [current-password set-current-password!] (hooks/use-state nil)
-        [new-password set-new-password!] (hooks/use-state nil)
-        [reset-password-status set-reset-password-status!] (hooks/use-state nil)
-        [forgot? set-forgot!] (hooks/use-state false)]
-    [:div.panel-wrap.is-encryption.mb-8
-     (hooks/use-effect!
-      (fn []
-        (when (and user-uuid token)
-          (-> (p/let [r (state/<invoke-db-worker :thread-api/get-user-rsa-key-pair token user-uuid)]
-                (set-rsa-key-pair! r))
-              (p/catch set-get-key-err!))
-          (-> (p/let [{:keys [password]} (state/<invoke-db-worker :thread-api/get-e2ee-password refresh-token)]
-                (set-current-password! password))
-              (p/catch (fn [_] (set-current-password! ""))))))
-      [user-uuid token])
-     [:div.flex.flex-col.gap-2.mt-4
-      (when (and user-uuid token)
-        (cond
-          get-key-err
-          [:p (t :encryption/fetch-key-pair-error get-key-err)]
-          (= rsa-key-pair :not-inited)
-          [:p (t :encryption/fetching-key-pair)]
-          (nil? rsa-key-pair)
-          [:div.flex.flex-col.gap-2
-           (when init-key-err [:p (t :encryption/init-key-pair-error init-key-err)])
-           (shui/button
-            {:on-click (fn []
-                         (-> (p/do!
-                              (state/<invoke-db-worker :thread-api/init-user-rsa-key-pair
-                                                       token
-                                                       refresh-token
-                                                       user-uuid)
-                              (p/let [r (state/<invoke-db-worker :thread-api/get-user-rsa-key-pair token user-uuid)]
-                                (set-rsa-key-pair! r)))
-                             (p/catch set-init-key-err!)))}
-            (t :encryption/init-key-pair))]
-          rsa-key-pair
-          (let [on-submit (fn []
-                            (-> (p/do!
-                                 (set-reset-password-status! (t :encryption/updating-password))
-                                 (state/<invoke-db-worker :thread-api/change-e2ee-password
-                                                          token refresh-token user-uuid current-password new-password)
-                                 (set-reset-password-status! (t :encryption/password-updated-successfully)))
-                                (p/catch (fn [e]
-                                           (log/error :reset-password-failed e)
-                                           (set-reset-password-status! (t :encryption/failed-to-update-password))))))]
-            [:div.flex.flex-col.gap-4
-             ;; [:p "E2EE key-pair already generated!"]
-             (when-not forgot?
-               [:div.flex.flex-col
-                [:p (t :encryption/remember-password-rich)]
-                [:p (t :encryption/cloud-password-rich)]])
-             (reset-encryption-password current-password new-password
-                                        {:reset-password-status reset-password-status
-                                         :set-new-password! set-new-password!
-                                         :set-current-password! set-current-password!
-                                         :on-click on-submit
-                                         :token token
-                                         :forgot? forgot?
-                                         :set-forgot! set-forgot!
-                                         :refresh-token refresh-token
-                                         :user-uuid user-uuid})])))]]))
-
 (hsx/defc mcp-server-row
   [t]
   (let [server-state (rfx/use-sub [:electron/server])
@@ -1487,9 +1355,6 @@
                (when logged-in?
                  [:collaboration (t :settings/collaboration) (ui/icon "users")])
 
-               (when logged-in?
-                 [:encryption (t :settings/encryption) (ui/icon "lock")])
-
                (when plugins-of-settings
                  [:plugins-setting (t :settings/plugins) (ui/icon "puzzle")])]]
 
@@ -1543,9 +1408,6 @@
 
         :collaboration
         (settings-collaboration)
-
-        :encryption
-        (encryption)
 
          :ai
          (if (util/electron?)

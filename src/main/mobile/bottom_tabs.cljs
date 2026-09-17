@@ -178,8 +178,7 @@
               [:rtc/download-remote-graph
                graph-name
                graph-uuid
-               graph-schema-version
-               (boolean (.-graphE2ee data))])))
+               graph-schema-version])))
 
          "refresh"
          (refresh-remote-graphs!)
