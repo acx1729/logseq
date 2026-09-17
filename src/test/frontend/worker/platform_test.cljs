@@ -16,18 +16,6 @@
                         (is false (str e))))
              (p/finally done))))
 
-(deftest read-secret-text-normalizes-undefined-to-nil-test
-  (async done
-         (-> (platform/read-secret-text {:crypto {:read-secret-text (fn [_key]
-                                                                      (p/resolved js/undefined))}}
-                                        "secret")
-             (p/then (fn [value]
-                       (is (nil? value))
-                       (is (not (identical? js/undefined value)))))
-             (p/catch (fn [e]
-                        (is false (str e))))
-             (p/finally done))))
-
 (deftest browser-platform-mirror-storage-is-unsupported-test
   (let [original-location (.-location js/globalThis)]
     (try

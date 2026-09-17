@@ -19,7 +19,6 @@
 (def ^:private test-repo "test-db-worker-repo")
 (def ^:private close-db!-orig db-worker/close-db!)
 (def ^:private decrypt-snapshot-datoms-batch-orig sync-crypt/<decrypt-snapshot-datoms-batch)
-(def ^:private fetch-graph-aes-key-for-download-orig sync-crypt/<fetch-graph-aes-key-for-download)
 (def ^:private rehydrate-large-titles-from-db-orig db-sync/rehydrate-large-titles-from-db!)
 (def ^:private rtc-log-orig rtc-log-and-state/rtc-log)
 (def ^:private update-local-tx-orig client-op/update-local-tx)
@@ -31,7 +30,6 @@
          [:thread-api/list-db :thread-api/init :thread-api/set-db-sync-config :thread-api/get-db-sync-config :thread-api/get-key-value
           :thread-api/db-sync-status :thread-api/db-sync-start :thread-api/db-sync-stop :thread-api/db-sync-update-presence
           :thread-api/db-sync-request-asset-download :thread-api/db-sync-download-missing-assets
-          :thread-api/db-sync-grant-graph-access :thread-api/db-sync-ensure-user-rsa-keys
           :thread-api/db-sync-list-remote-graphs :thread-api/db-sync-upload-graph :thread-api/db-sync-create-remote-graph
           :thread-api/db-sync-stop-upload :thread-api/db-sync-resume-upload :thread-api/db-sync-upload-stopped?
           :thread-api/db-sync-get-all-block-conflicts :thread-api/db-sync-clear-block-conflicts
@@ -120,7 +118,6 @@
             :close-db (fn [db] (.close db))
             :exec (fn [db sql-or-opts] (.exec db sql-or-opts))
             :transaction (fn [db f] (.transaction db f))}
-   :crypto {}
    :timers {:set-interval! (fn [_ _] nil)}})
 
 (defn- restoring-worker-state
@@ -134,7 +131,6 @@
         cleanup (fn []
                   (set! db-worker/close-db! close-db!-orig)
                   (set! sync-crypt/<decrypt-snapshot-datoms-batch decrypt-snapshot-datoms-batch-orig)
-                  (set! sync-crypt/<fetch-graph-aes-key-for-download fetch-graph-aes-key-for-download-orig)
                   (set! db-sync/rehydrate-large-titles-from-db! rehydrate-large-titles-from-db-orig)
                   (set! rtc-log-and-state/rtc-log rtc-log-orig)
                   (set! client-op/update-local-tx update-local-tx-orig)
@@ -147,7 +143,6 @@
                   (reset! @#'platform/*platform platform-prev))]
     (set! db-worker/close-db! close-db!-orig)
     (set! sync-crypt/<decrypt-snapshot-datoms-batch decrypt-snapshot-datoms-batch-orig)
-    (set! sync-crypt/<fetch-graph-aes-key-for-download fetch-graph-aes-key-for-download-orig)
     (set! db-sync/rehydrate-large-titles-from-db! rehydrate-large-titles-from-db-orig)
     (set! rtc-log-and-state/rtc-log rtc-log-orig)
     (set! client-op/update-local-tx update-local-tx-orig)
@@ -451,7 +446,7 @@
                                                                :sync/pull (p/resolved {:t 77})
                                                                :sync/snapshot-download (p/resolved {:url "https://snapshot.example.test"})
                                                                (p/rejected (ex-info "unexpected schema" {:schema schema}))))
-                                  sync-download/prepare-import! (fn [repo _reset? gid _graph-e2ee? & _]
+                                  sync-download/prepare-import! (fn [repo _reset? gid & _]
                                                                   (reset! @#'sync-download/*import-state
                                                                           {:import-id import-id
                                                                            :repo repo
@@ -706,12 +701,6 @@
                   db-sync/download-missing-assets! (fn [repo graph-id]
                                                      (swap! calls conj [:download-missing-assets repo graph-id])
                                                      (:download-missing-assets results))
-                  sync-crypt/<grant-graph-access! (fn [repo graph-id target-email]
-                                                    (swap! calls conj [:grant-graph-access repo graph-id target-email])
-                                                    :granted)
-                  sync-crypt/ensure-user-rsa-keys! (fn [opts]
-                                                     (swap! calls conj [:ensure-user-rsa-keys opts])
-                                                     (:ensure-keys results))
                   db-sync/list-remote-graphs! (fn []
                                                 (swap! calls conj [:list-remote-graphs])
                                                 (:list-graphs results))
@@ -748,12 +737,9 @@
     (is (= :asset-requested ((get-thread-api :thread-api/db-sync-request-asset-download) repo asset)))
     (is (= (:download-missing-assets results)
            ((get-thread-api :thread-api/db-sync-download-missing-assets) repo graph-id)))
-    (is (= :granted ((get-thread-api :thread-api/db-sync-grant-graph-access) repo graph-id email)))
-    (is (= (:ensure-keys results) ((get-thread-api :thread-api/db-sync-ensure-user-rsa-keys) opts)))
-    (is (= (:ensure-keys results) ((get-thread-api :thread-api/db-sync-ensure-user-rsa-keys))))
     (is (= (:list-graphs results) ((get-thread-api :thread-api/db-sync-list-remote-graphs))))
     (is (= :uploading ((get-thread-api :thread-api/db-sync-upload-graph) repo)))
-    (is (= :created ((get-thread-api :thread-api/db-sync-create-remote-graph) repo true false)))
+    (is (= :created ((get-thread-api :thread-api/db-sync-create-remote-graph) repo false)))
     (is (= :stopped-upload ((get-thread-api :thread-api/db-sync-stop-upload) repo)))
     (is (= :resumed-upload ((get-thread-api :thread-api/db-sync-resume-upload) repo)))
     (is (= (:upload-stopped? results) ((get-thread-api :thread-api/db-sync-upload-stopped?) repo)))
@@ -765,10 +751,8 @@
                     :conflicts []}]
                   %)
               @calls))
-    (is (some #(= [:ensure-user-rsa-keys nil] %) @calls))
     (is (some #(= [:create-remote-graph repo
-                   {:graph-e2ee? true
-                    :graph-ready-for-use? false}]
+                   {:graph-ready-for-use? false}]
                   %)
               @calls))))
 
@@ -797,14 +781,14 @@
            rows-result {:rows-imported 2}
            finalize-result {:ok true}
            rehydrate-result {:rehydrated 3}]
-       (with-redefs [sync-download/download-graph-by-id! (fn [repo graph-id graph-e2ee?]
-                                                            (swap! calls conj [:download-graph-by-id repo graph-id graph-e2ee?])
+       (with-redefs [sync-download/download-graph-by-id! (fn [repo graph-id]
+                                                            (swap! calls conj [:download-graph-by-id repo graph-id])
                                                             download-result)
                      db-sync/rehydrate-large-titles-from-db! (fn [repo graph-id]
                                                                (swap! calls conj [:rehydrate-large-titles repo graph-id])
                                                                rehydrate-result)
-                     sync-download/prepare-import! (fn [repo reset? graph-id graph-e2ee? total-datoms]
-                                                     (swap! calls conj [:prepare-import repo reset? graph-id graph-e2ee? total-datoms])
+                     sync-download/prepare-import! (fn [repo reset? graph-id total-datoms]
+                                                     (swap! calls conj [:prepare-import repo reset? graph-id total-datoms])
                                                      import-prepare-result)
                      sync-download/import-rows-chunk! (fn [rows graph-id import-id]
                                                         (swap! calls conj [:import-rows-chunk rows graph-id import-id])
@@ -812,12 +796,12 @@
                      sync-download/finalize-import! (fn [repo graph-id remote-tx import-id]
                                                      (swap! calls conj [:finalize-import repo graph-id remote-tx import-id])
                                                      finalize-result)]
-         (is (= download-result ((get-thread-api :thread-api/db-sync-download-graph-by-id) request-repo request-graph-id true)))
+         (is (= download-result ((get-thread-api :thread-api/db-sync-download-graph-by-id) request-repo request-graph-id)))
          (is (= rehydrate-result ((get-thread-api :thread-api/db-sync-rehydrate-large-titles) request-repo request-graph-id)))
-         (is (= import-prepare-result ((get-thread-api :thread-api/db-sync-import-prepare) request-repo true request-graph-id true 99)))
+         (is (= import-prepare-result ((get-thread-api :thread-api/db-sync-import-prepare) request-repo true request-graph-id 99)))
          (is (= rows-result ((get-thread-api :thread-api/db-sync-import-rows-chunk) [[1 "row" nil]] request-graph-id "import-1")))
          (is (= finalize-result ((get-thread-api :thread-api/db-sync-import-finalize) request-repo request-graph-id 77 "import-1")))
-         (is (some #(= [:prepare-import request-repo true request-graph-id true 99] %) @calls)))))))
+         (is (some #(= [:prepare-import request-repo true request-graph-id 99] %) @calls)))))))
 
 (deftest thread-api-set-and-get-db-sync-config-uses-sanitized-config-test
   (restoring-worker-state

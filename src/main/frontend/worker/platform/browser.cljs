@@ -59,18 +59,6 @@
   [k value]
   (idb/set-item! k value))
 
-(defn- save-secret-text!
-  [key text]
-  (kv-set! key text))
-
-(defn- read-secret-text
-  [key]
-  (kv-get key))
-
-(defn- delete-secret-text!
-  [key]
-  (kv-set! key nil))
-
 (defn- install-opfs-pool
   [sqlite pool-name]
   (.installOpfsSAHPoolVfs ^js sqlite #js {:name pool-name
@@ -228,7 +216,4 @@
             :close-db (fn [db] (.close db))
             :exec (fn [db sql-or-opts] (.exec db sql-or-opts))
             :transaction (fn [db f] (.transaction db f))}
-   :crypto {:save-secret-text! save-secret-text!
-            :read-secret-text read-secret-text
-            :delete-secret-text! delete-secret-text!}
    :timers {:set-interval! (fn [f ms] (js/setInterval f ms))}})

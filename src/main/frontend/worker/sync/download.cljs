@@ -304,10 +304,8 @@
   #{:block/tx-id})
 
 (defn- import-datoms-batch!
-  [conn aes-key graph-e2ee? datoms]
-  (p/let [datoms-batch (if graph-e2ee?
-                         (sync-crypt/<decrypt-snapshot-datoms-batch aes-key datoms)
-                         datoms)
+  [conn aes-key datoms]
+  (p/let [datoms-batch (sync-crypt/<decrypt-snapshot-datoms-batch aes-key datoms)
           datoms-batch (remove #(contains? snapshot-local-only-attrs (:a %))
                                datoms-batch)
           block-eids (into #{}
@@ -384,7 +382,7 @@
                                              (str "Importing data " imported-datoms))}))))
 
 (defn- <replay-imported-rows!
-  [{:keys [conn rows-db aes-key graph-e2ee? graph-id import-id]}]
+  [{:keys [conn rows-db aes-key graph-id import-id]}]
   (if (nil? rows-db)
     (p/resolved nil)
     (let [source-storage (sync-temp-sqlite/new-temp-sqlite-storage rows-db)
@@ -392,52 +390,47 @@
       (p/loop [remaining (seq (snapshot-datoms-in-import-order source-conn))]
         (if (seq remaining)
           (let [[batch remaining'] (take-import-datoms-batch remaining snapshot-import-datoms-batch-size)]
-            (p/let [_ (import-datoms-batch! conn aes-key graph-e2ee? batch)
+            (p/let [_ (import-datoms-batch! conn aes-key batch)
                     _ (log-import-progress! graph-id import-id (count batch))
                     _ (<yield-next-tick)]
               (p/recur remaining')))
           (p/resolved nil))))))
 
 (defn prepare-import!
-  [repo reset? graph-id graph-e2ee? & [total-datoms]]
-  (let [graph-e2ee? (if (nil? graph-e2ee?) true (true? graph-e2ee?))]
-    (-> (p/let [close-db-f (require-thread-api-f! :thread-api/db-sync-close-db)
-                unlink-db-f (require-thread-api-f! :thread-api/unsafe-unlink-db)
-                invalidate-search-db-f (require-thread-api-f! :thread-api/db-sync-invalidate-search-db)
-                create-or-open-db-f (require-thread-api-f! :thread-api/create-or-open-db)
-                _ (when-let [state @*import-state]
-                    (close-import-state! state)
-                    (close-db-f (:repo state)))
-                _ (reset! *import-state nil)
-                _ (when reset? (close-db-f repo))
-                _ (when reset? (unlink-db-f repo))
-                _ (when reset? (invalidate-search-db-f repo))
-                import-id (str (random-uuid))
-                aes-key (when graph-e2ee?
-                          (sync-crypt/<fetch-graph-aes-key-for-download graph-id))
-                _ (when (and graph-e2ee? (nil? aes-key))
-                    (fail-fast :db-sync/missing-field {:repo repo :field :aes-key}))
-                _ (create-or-open-db-f repo {:close-other-db? true
-                                             :sync-download-graph? true})
-                conn (worker-state/get-datascript-conn repo)
-                _ (when-not conn
-                    (fail-fast :db-sync/missing-field {:repo repo :field :datascript-conn}))]
-          (reset! *import-state {:aes-key aes-key
-                                 :conn conn
-                                 :graph-e2ee? graph-e2ee?
-                                 :graph-id graph-id
-                                 :import-id import-id
-                                 :imported-datoms 0
-                                 :rows-db nil
-                                 :rows-imported? false
-                                 :rows-path nil
-                                 :rows-pool nil
-                                 :repo repo
-                                 :total-datoms total-datoms})
-          {:import-id import-id})
-        (p/catch (fn [error]
-                   (reset! *import-state nil)
-                   (throw error))))))
+  [repo reset? graph-id & [total-datoms]]
+  (-> (p/let [close-db-f (require-thread-api-f! :thread-api/db-sync-close-db)
+              unlink-db-f (require-thread-api-f! :thread-api/unsafe-unlink-db)
+              invalidate-search-db-f (require-thread-api-f! :thread-api/db-sync-invalidate-search-db)
+              create-or-open-db-f (require-thread-api-f! :thread-api/create-or-open-db)
+              _ (when-let [state @*import-state]
+                  (close-import-state! state)
+                  (close-db-f (:repo state)))
+              _ (reset! *import-state nil)
+              _ (when reset? (close-db-f repo))
+              _ (when reset? (unlink-db-f repo))
+              _ (when reset? (invalidate-search-db-f repo))
+              import-id (str (random-uuid))
+              aes-key (sync-crypt/<ensure-graph-aes-key graph-id)
+              _ (create-or-open-db-f repo {:close-other-db? true
+                                           :sync-download-graph? true})
+              conn (worker-state/get-datascript-conn repo)
+              _ (when-not conn
+                  (fail-fast :db-sync/missing-field {:repo repo :field :datascript-conn}))]
+        (reset! *import-state {:aes-key aes-key
+                               :conn conn
+                               :graph-id graph-id
+                               :import-id import-id
+                               :imported-datoms 0
+                               :rows-db nil
+                               :rows-imported? false
+                               :rows-path nil
+                               :rows-pool nil
+                               :repo repo
+                               :total-datoms total-datoms})
+        {:import-id import-id})
+      (p/catch (fn [error]
+                 (reset! *import-state nil)
+                 (throw error)))))
 
 (defn import-rows-chunk!
   [rows graph-id import-id]
@@ -469,15 +462,17 @@
                  (throw error)))))
 
 (defn- set-graph-sync-metadata!
-  [conn graph-id graph-e2ee?]
+  "Marks the local graph as the remote graph `graph-id`; every remote graph is
+  encrypted with its server-held key."
+  [conn graph-id]
   (assert (uuid? graph-id))
   (ldb/transact! conn [(ldb/kv :logseq.kv/graph-uuid graph-id)
                        (ldb/kv :logseq.kv/graph-remote? true)
-                       (ldb/kv :logseq.kv/graph-rtc-e2ee? (true? graph-e2ee?))]
+                       (ldb/kv :logseq.kv/graph-rtc-e2ee? true)]
     {:persist-op? false}))
 
 (defn download-graph-by-id!
-  [repo graph-id graph-e2ee?]
+  [repo graph-id]
   (let [base (sync-auth/http-base-url @worker-state/*db-sync-config)]
     (if (and (seq repo) (seq graph-id) (seq base))
       (let [stage* (atom :init)
@@ -500,9 +495,8 @@
                     snapshot-resp (fetch-json (str base "/sync/" graph-id "/snapshot/download")
                                               {:method "GET"}
                                               :sync/snapshot-download)
-                    _ (when graph-e2ee?
-                        (reset! stage* :prepare-e2ee)
-                        (sync-crypt/<fetch-graph-aes-key-for-download graph-id))
+                    _ (reset! stage* :fetch-graph-key)
+                    _ (sync-crypt/<ensure-graph-aes-key graph-id)
                     _ (reset! stage* :fetch-snapshot-stream)
                     resp (js/fetch (:url snapshot-resp)
                                    (clj->js (with-auth-headers {:method "GET"})))
@@ -517,7 +511,7 @@
                                      (if-let [import-id @import-id*]
                                        (p/resolved import-id)
                                        (p/let [_ (reset! stage* :prepare-import)
-                                               {:keys [import-id]} (prepare-import! repo true graph-id graph-e2ee?)]
+                                               {:keys [import-id]} (prepare-import! repo true graph-id)]
                                          (reset! import-id* import-id)
                                          import-id)))]
                 (p/let [_ (do
@@ -535,11 +529,10 @@
                             (reset! stage* :finalize-import)
                             (finalize-import! repo graph-id remote-tx import-id))]
                   (when-let [conn (worker-state/get-datascript-conn repo)]
-                    (set-graph-sync-metadata! conn (uuid graph-id) graph-e2ee?))
+                    (set-graph-sync-metadata! conn (uuid graph-id)))
                   {:repo repo
                    :graph-id graph-id
-                   :remote-tx remote-tx
-                   :graph-e2ee? graph-e2ee?})))
+                   :remote-tx remote-tx})))
             (p/catch (fn [error]
                        (when-let [import-id @import-id*]
                          (clear-import-state! import-id))
@@ -549,7 +542,6 @@
                        (log/error :db-sync/download-graph-by-id-failed
                                   {:repo repo
                                    :graph-id graph-id
-                                   :graph-e2ee? graph-e2ee?
                                    :stage @stage*
                                    :error error
                                    :error-stack (when (instance? js/Error error)
@@ -559,7 +551,6 @@
                        (throw (ex-info "db-sync download failed"
                                       {:repo repo
                                        :graph-id graph-id
-                                       :graph-e2ee? graph-e2ee?
                                        :stage @stage*
                                        :code (:code (ex-data error))
                                        :error-message (or (ex-message error)

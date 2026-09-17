@@ -54,18 +54,12 @@
                 (string/replace "\\" "_")
                 (string/replace ":" "_"))))
 
-     (defn- decode-username
-       [username]
-       (let [arr (new js/Uint8Array (count username))]
-         (doseq [i (range (count username))]
-           (aset arr i (.charCodeAt username i)))
-         (.decode (new js/TextDecoder "utf-8") arr)))
-
-     (defn parse-jwt [jwt]
+     (defn parse-jwt
+       "The claims of a JWT as a map; the signature is checked by the server."
+       [jwt]
        (some-> jwt
                (string/split ".")
                second
                (#(base64/decodeString % true))
                js/JSON.parse
-               (js->clj :keywordize-keys true)
-               (update :cognito:username decode-username)))))
+               (js->clj :keywordize-keys true)))))

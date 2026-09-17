@@ -46,7 +46,7 @@
                           (is false (str error))
                           (done)))))))
 
-(deftest encrypted-download-preflights-e2ee-before-fetching-snapshot-stream-test
+(deftest download-fetches-the-graph-key-before-the-snapshot-stream-test
   (async done
          (let [config-prev @worker-state/*db-sync-config
                fetch-prev js/fetch
@@ -65,14 +65,14 @@
                                                             (p/resolved {:url "https://sync.example.test/snapshot"})
 
                                                             (p/rejected (ex-info "unexpected schema" {:schema schema}))))
-                               sync-crypt/<fetch-graph-aes-key-for-download (fn [_graph-id]
-                                                                               (swap! calls conj :e2ee-preflight)
-                                                                               (p/resolved :aes-key))
+                               sync-crypt/<ensure-graph-aes-key (fn [_graph-id]
+                                                                   (swap! calls conj :graph-key)
+                                                                   (p/resolved :aes-key))
                                sync-download/<stream-snapshot-row-batches! (fn [_resp _batch-size _on-batch]
                                                                              (p/resolved {:chunk-count 0}))]
-                 (sync-download/download-graph-by-id! "repo" "graph-1" true))
+                 (sync-download/download-graph-by-id! "repo" "graph-1"))
                (p/then (fn [_]
-                         (is (= [:e2ee-preflight :snapshot-stream] @calls))))
+                         (is (= [:graph-key :snapshot-stream] @calls))))
                (p/catch (fn [error]
                           (is false (str error))))
                (p/finally (fn []
@@ -80,7 +80,7 @@
                             (reset! worker-state/*db-sync-config config-prev)
                             (done)))))))
 
-(deftest encrypted-download-failure-emits-completed-log-test
+(deftest download-failure-emits-completed-log-test
   (async done
          (let [config-prev @worker-state/*db-sync-config
                log-events (atom [])]
@@ -94,12 +94,12 @@
                                                             (p/resolved {:url "https://sync.example.test/snapshot"})
 
                                                             (p/rejected (ex-info "unexpected schema" {:schema schema}))))
-                               sync-crypt/<fetch-graph-aes-key-for-download (fn [_graph-id]
-                                                                               (p/rejected (ex-info "decrypt-private-key" {})))
+                               sync-crypt/<ensure-graph-aes-key (fn [_graph-id]
+                                                                   (p/rejected (ex-info "db-sync request failed" {:status 403})))
                                rtc-log-and-state/rtc-log (fn [type payload]
                                                            (swap! log-events conj (assoc payload :type type))
                                                            nil)]
-                 (sync-download/download-graph-by-id! "repo" "graph-1" true))
+                 (sync-download/download-graph-by-id! "repo" "graph-1"))
                (p/then (fn [_]
                          (is false "expected download failure")))
                (p/catch (fn [error]

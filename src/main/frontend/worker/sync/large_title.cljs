@@ -154,7 +154,6 @@
                 tx-data
                 conn
                 get-conn-f
-                graph-e2ee?-f
                 ensure-graph-aes-key-f
                 fail-fast-f]}]
   (when-let [conn* (or conn (get-conn-f repo))]
@@ -178,10 +177,7 @@
                        (distinct)))]
       (when (seq items)
         (p/let [aes-key* (or aes-key
-                             (when (graph-e2ee?-f repo)
-                               (ensure-graph-aes-key-f repo graph-id*)))
-                _ (when (and (graph-e2ee?-f repo) (nil? aes-key*))
-                    (fail-fast-f :db-sync/missing-field {:repo repo :field :aes-key}))]
+                             (ensure-graph-aes-key-f graph-id*))]
           (p/all
            (mapv (fn [{:keys [e obj]}]
                    (let [eid (resolve-large-title-item-eid @conn* {:e e :obj obj})]

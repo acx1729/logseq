@@ -201,25 +201,15 @@
                                   :count (count dropped)
                                   :attrs (vec (distinct (map :a dropped)))
                                   :max-bytes (apply max (map :bytes dropped))}))
-                        encrypted-datoms (if aes-key
-                                           (sync-crypt/<encrypt-datoms aes-key kept)
-                                           kept)
+                        encrypted-datoms (sync-crypt/<encrypt-datoms aes-key kept)
                         tx-data (mapv sync-large-title/datom->tx encrypted-datoms)]
                   (d/transact! (:conn temp) tx-data {:initial-db? true})
                   nil))
               :progress-f
               (fn [processed total]
                 (update-progress {:sub-type :upload-progress
-                                  :message (if aes-key
-                                             (str "Encrypting " processed "/" total)
-                                             (str "Preparing " processed "/" total))}))})]
+                                  :message (str "Encrypting " processed "/" total)}))})]
     temp))
-
-(defn- normalize-graph-e2ee?
-  [graph-e2ee?]
-  (if (nil? graph-e2ee?)
-    true
-    (true? graph-e2ee?)))
 
 (defn- graph-id->uuid
   [repo graph-id]
@@ -234,34 +224,33 @@
                                          :error e}))))
 
 (defn- set-graph-sync-metadata!
-  [repo graph-id graph-e2ee?]
+  "Marks the local graph as the remote graph `graph-id`; every remote graph is
+  encrypted with its server-held key."
+  [repo graph-id]
   (when-let [conn (worker-state/get-datascript-conn repo)]
     (ldb/transact! conn [(ldb/kv :logseq.kv/graph-uuid (graph-id->uuid repo graph-id))
                          (ldb/kv :logseq.kv/graph-remote? true)
-                         (ldb/kv :logseq.kv/graph-rtc-e2ee? (true? graph-e2ee?))]
+                         (ldb/kv :logseq.kv/graph-rtc-e2ee? true)]
       {:outliner-op :set-kvs})))
 
 (defn- persist-upload-graph-identity!
-  [repo graph-id graph-e2ee?]
-  (let [graph-id (some-> graph-id str)
-        graph-e2ee? (normalize-graph-e2ee? graph-e2ee?)]
+  [repo graph-id]
+  (let [graph-id (some-> graph-id str)]
     (when-not (seq graph-id)
       (fail-fast :db-sync/missing-field {:repo repo :field :graph-id}))
-    (set-graph-sync-metadata! repo graph-id graph-e2ee?)
+    (set-graph-sync-metadata! repo graph-id)
     (ensure-client-graph-uuid! repo graph-id)
-    {:graph-id graph-id
-     :graph-e2ee? graph-e2ee?}))
+    {:graph-id graph-id}))
 
 (defn- <create-remote-graph-aux!
-  [repo {:keys [graph-e2ee? graph-ready-for-use?]}]
+  [repo {:keys [graph-ready-for-use?]}]
   (let [base (http-base-url)
         graph-name (some-> repo common-config/strip-leading-db-version-prefix)
         schema-version (some-> (worker-state/get-datascript-conn repo)
                                deref
                                ldb/get-graph-schema-version
                                :major
-                               str)
-        graph-e2ee? (normalize-graph-e2ee? graph-e2ee?)]
+                               str)]
     (cond
       (not (seq base))
       (fail-fast :db-sync/missing-field {:repo repo :field :http-base})
@@ -272,12 +261,9 @@
       :else
       (do
         (sync-util/require-auth-token! {:repo repo :field :auth-token})
-        (p/let [_ (when graph-e2ee?
-                    (sync-crypt/ensure-user-rsa-keys! {:ensure-server? true}))
-                body (coerce-http-request :graphs/create
+        (p/let [body (coerce-http-request :graphs/create
                                           {:graph-name graph-name
                                            :schema-version schema-version
-                                           :graph-e2ee? graph-e2ee?
                                            :graph-ready-for-use? (not= false graph-ready-for-use?)})
                 _ (when (nil? body)
                     (fail-fast :db-sync/invalid-field {:repo repo
@@ -287,17 +273,13 @@
                                     :headers {"content-type" "application/json"}
                                     :body (js/JSON.stringify (clj->js body))}
                                    {:response-schema :graphs/create})
-                graph-id (:graph-id result)
-                graph-e2ee? (normalize-graph-e2ee? (if (contains? result :graph-e2ee?)
-                                                     (:graph-e2ee? result)
-                                                     graph-e2ee?))]
+                graph-id (:graph-id result)]
           (when-not (seq graph-id)
             (fail-fast :db-sync/missing-field {:repo repo
                                                :field :graph-id
                                                :op :create-graph}))
-          (persist-upload-graph-identity! repo graph-id graph-e2ee?)
-          {:graph-id graph-id
-           :graph-e2ee? graph-e2ee?})))))
+          (persist-upload-graph-identity! repo graph-id)
+          {:graph-id graph-id})))))
 
 (defn list-remote-graphs!
   []
@@ -324,7 +306,7 @@
   (= target-graph-name graph-name))
 
 (defn create-remote-graph!
-  [repo {:keys [graph-e2ee? graph-ready-for-use?]}]
+  [repo {:keys [graph-ready-for-use?]}]
   (let [target-graph-name (some-> repo common-config/strip-leading-db-version-prefix)]
     (cond
       (not (seq target-graph-name))
@@ -345,9 +327,7 @@
           (fail-upload-graph-already-exists! repo {:graph-name target-graph-name})
 
           :else
-          (p/let [_ (sync-crypt/<preflight-upload-e2ee! repo graph-e2ee?)]
-            (<create-remote-graph-aux! repo {:graph-e2ee? graph-e2ee?
-                                             :graph-ready-for-use? graph-ready-for-use?})))))))
+          (<create-remote-graph-aux! repo {:graph-ready-for-use? graph-ready-for-use?}))))))
 
 (defn upload-graph!
   [repo]
@@ -360,17 +340,12 @@
       (p/rejected (ex-info "db-sync missing base"
                            {:repo repo :base base}))
       (if-let [source-conn (worker-state/get-datascript-conn repo)]
-        (p/let [graph-e2ee? (normalize-graph-e2ee? (sync-crypt/graph-e2ee? repo))
-                {:keys [graph-id]} (create-remote-graph! repo {:graph-e2ee? graph-e2ee?
-                                                               :graph-ready-for-use? false})]
-          (p/let [aes-key (when graph-e2ee?
-                            (sync-crypt/<ensure-graph-aes-key repo graph-id))
-                  _ (when (and graph-e2ee? (nil? aes-key))
-                      (fail-fast :db-sync/missing-field {:repo repo :field :aes-key}))]
+        (p/let [{:keys [graph-id]} (create-remote-graph! repo {:graph-ready-for-use? false})]
+          (p/let [aes-key (sync-crypt/<ensure-graph-aes-key graph-id)]
             (let [snapshot-checksum (sync-checksum/recompute-checksum @source-conn)]
               (client-op/update-local-checksum repo snapshot-checksum)
               (p/let [_ (update-progress {:sub-type :upload-progress
-                                          :message (if graph-e2ee? "Encrypting..." "Preparing...")})
+                                          :message "Encrypting..."})
                       {:keys [db] :as temp} (<prepare-upload-temp-sqlite!
                                              repo graph-id source-conn aes-key update-progress)
                       total-rows (count-kvs-rows db)]

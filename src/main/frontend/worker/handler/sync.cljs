@@ -5,7 +5,6 @@
             [frontend.worker.state :as worker-state]
             [frontend.worker.sync :as db-sync]
             [frontend.worker.sync.client-op :as client-op]
-            [frontend.worker.sync.crypt :as sync-crypt]
             [frontend.worker.sync.download :as sync-download]))
 
 (def-thread-api :thread-api/set-db-sync-config
@@ -41,14 +40,6 @@
   [repo]
   (db-sync/retry-asset-upload! repo))
 
-(def-thread-api :thread-api/db-sync-grant-graph-access
-  [repo graph-id target-email]
-  (sync-crypt/<grant-graph-access! repo graph-id target-email))
-
-(def-thread-api :thread-api/db-sync-ensure-user-rsa-keys
-  [& [opts]]
-  (sync-crypt/ensure-user-rsa-keys! opts))
-
 (def-thread-api :thread-api/db-sync-list-remote-graphs
   []
   (db-sync/list-remote-graphs!))
@@ -58,9 +49,8 @@
   (db-sync/upload-graph! repo))
 
 (def-thread-api :thread-api/db-sync-create-remote-graph
-  [repo graph-e2ee? graph-ready-for-use?]
-  (db-sync/create-remote-graph! repo {:graph-e2ee? graph-e2ee?
-                                      :graph-ready-for-use? graph-ready-for-use?}))
+  [repo graph-ready-for-use?]
+  (db-sync/create-remote-graph! repo {:graph-ready-for-use? graph-ready-for-use?}))
 
 (def-thread-api :thread-api/db-sync-stop-upload
   [repo]
@@ -100,5 +90,5 @@
     :conflicts []}))
 
 (def-thread-api :thread-api/db-sync-download-graph-by-id
-  [repo graph-id graph-e2ee?]
-  (sync-download/download-graph-by-id! repo graph-id graph-e2ee?))
+  [repo graph-id]
+  (sync-download/download-graph-by-id! repo graph-id))

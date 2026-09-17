@@ -23,15 +23,6 @@
 
 (def ^:private remote-asset-download-parallelism 10)
 
-(defn graph-aes-key
-  [repo graph-id fail-fast-f]
-  (if (sync-crypt/graph-e2ee? repo)
-    (p/let [aes-key (sync-crypt/<ensure-graph-aes-key repo graph-id)
-            _ (when (nil? aes-key)
-                (fail-fast-f :db-sync/missing-field {:repo repo :field :aes-key}))]
-      aes-key)
-    (p/resolved nil)))
-
 (defn- asset-file-name
   [asset-uuid asset-type]
   (str asset-uuid "." asset-type))
@@ -146,10 +137,7 @@
   [repo graph-id asset-uuid asset-type checksum]
   (let [base (sync-auth/http-base-url @worker-state/*db-sync-config)]
     (if (and (seq base) (seq graph-id) (seq asset-type) (seq checksum))
-      (-> (p/let [aes-key (graph-aes-key
-                           repo graph-id
-                           (fn [tag data]
-                             (throw (ex-info (name tag) data))) )
+      (-> (p/let [aes-key (sync-crypt/<ensure-graph-aes-key graph-id)
                   asset-id (str asset-uuid)
                   put-url (sync-large-title/asset-url base graph-id asset-id asset-type)
                   asset-bytes (->
@@ -161,11 +149,9 @@
                                                           {:type :rtc.exception/read-asset-failed}
                                                           e)))))
                   _ (clear-missing-asset-upload-file! repo asset-id)
-                  asset-bytes (if aes-key (->uint8 asset-bytes) asset-bytes)
-                  payload (if (not aes-key)
-                            asset-bytes
-                            (p/let [encrypted-bytes (crypt/<encrypt-uint8array aes-key asset-bytes)]
-                              (ldb/write-transit-str encrypted-bytes)))
+                  asset-bytes (->uint8 asset-bytes)
+                  payload (p/let [encrypted-bytes (crypt/<encrypt-uint8array aes-key asset-bytes)]
+                            (ldb/write-transit-str encrypted-bytes))
                   total (payload-size payload)
                   _ (notify-asset-progress! repo asset-id :upload 0 total)
                   headers (merge (sync-auth/auth-headers (worker-state/get-id-token))
@@ -352,10 +338,7 @@
   [repo graph-id asset-uuid asset-type]
   (let [base (sync-auth/http-base-url @worker-state/*db-sync-config)]
     (if (and (seq base) (seq graph-id) (seq asset-type))
-      (-> (p/let [aes-key (graph-aes-key
-                           repo graph-id
-                           (fn [tag data]
-                             (throw (ex-info (name tag) data))))
+      (-> (p/let [aes-key (sync-crypt/<ensure-graph-aes-key graph-id)
                   asset-id (str asset-uuid)
                   get-url (sync-large-title/asset-url base graph-id asset-id asset-type)
                   headers (sync-auth/auth-headers (worker-state/get-id-token))
@@ -374,11 +357,8 @@
                   body-size (.-byteLength body)
                   total' (if (pos? total) total body-size)
                   _ (notify-asset-progress! repo asset-id :download body-size total')
-                  asset-file
-                  (if (not aes-key)
-                    body
-                    (let [asset-file-untransited (ldb/read-transit-str (.decode (js/TextDecoder.) body))]
-                      (crypt/<decrypt-uint8array aes-key asset-file-untransited)))]
+                  asset-file (let [asset-file-untransited (ldb/read-transit-str (.decode (js/TextDecoder.) body))]
+                               (crypt/<decrypt-uint8array aes-key asset-file-untransited))]
             (<write-asset-bytes! repo asset-id asset-type asset-file))
           (p/catch
            (fn [e]

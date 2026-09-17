@@ -55,7 +55,7 @@
         (concat
          [:thread-api/list-db :thread-api/init :thread-api/set-db-sync-config :thread-api/get-db-sync-config :thread-api/get-key-value
           :thread-api/db-sync-status :thread-api/db-sync-start :thread-api/db-sync-stop :thread-api/db-sync-update-presence
-          :thread-api/db-sync-request-asset-download :thread-api/db-sync-grant-graph-access :thread-api/db-sync-ensure-user-rsa-keys
+          :thread-api/db-sync-request-asset-download
           :thread-api/db-sync-list-remote-graphs :thread-api/db-sync-upload-graph :thread-api/db-sync-create-remote-graph
           :thread-api/db-sync-stop-upload :thread-api/db-sync-resume-upload :thread-api/db-sync-upload-stopped?
           :thread-api/db-sync-get-all-block-conflicts :thread-api/db-sync-clear-block-conflicts
@@ -165,7 +165,6 @@
              :close-db (fn [db] (.close db))
              :exec (fn [db sql-or-opts] (.exec db sql-or-opts))
              :transaction (fn [db f] (.transaction db f))}
-    :crypto {}
     :embedding {:model-id "test-model"
                 :dimension search/vector-embedding-dimension
                 :embed-texts embed-texts}
@@ -486,8 +485,6 @@
     (is (contains? api-map :thread-api/db-sync-stop))
     (is (contains? api-map :thread-api/db-sync-update-presence))
     (is (contains? api-map :thread-api/db-sync-request-asset-download))
-    (is (contains? api-map :thread-api/db-sync-grant-graph-access))
-    (is (contains? api-map :thread-api/db-sync-ensure-user-rsa-keys))
     (is (contains? api-map :thread-api/db-sync-upload-graph))))
 
 (deftest resolve-initial-config-falls-back-to-template-config-test

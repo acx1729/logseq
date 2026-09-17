@@ -6,6 +6,7 @@
             [frontend.worker.shared-service :as shared-service]
             [frontend.worker.state :as worker-state]
             [frontend.worker.sync.assets :as sync-assets]
+            [frontend.worker.sync.crypt :as sync-crypt]
             [logseq.db :as ldb]
             [logseq.db.frontend.schema :as db-schema]
             [promesa.core :as p]))
@@ -154,8 +155,8 @@
                             :body (.-body opts)})
                    (p/resolved #js {:ok true
                                      :status 200})))
-           (-> (p/with-redefs [sync-assets/graph-aes-key
-                               (fn [_repo _graph-id _fail-fast-f]
+           (-> (p/with-redefs [sync-crypt/<ensure-graph-aes-key
+                               (fn [_graph-id]
                                  (p/resolved "aes-key"))
                                platform/current
                                (fn [] {})
@@ -202,9 +203,9 @@
                    (reset! fetch-called? true)
                    (p/resolved #js {:ok true
                                      :status 200})))
-           (-> (p/with-redefs [sync-assets/graph-aes-key
-                               (fn [_repo _graph-id _fail-fast-f]
-                                 (p/resolved nil))
+           (-> (p/with-redefs [sync-crypt/<ensure-graph-aes-key
+                               (fn [_graph-id]
+                                 (p/resolved "aes-key"))
                                platform/current
                                (fn [] {})
                                platform/asset-read-bytes!

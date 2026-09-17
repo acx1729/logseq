@@ -13,8 +13,7 @@
             [lambdaisland.glogi :as log]
             [logseq.common.config :as common-config]
             [logseq.db.sqlite.backup :as sqlite-backup]
-            [promesa.core :as p]
-            ["keytar" :as keytar]))
+            [promesa.core :as p]))
 
 (defn- resolve-database-sync-ctor
   []
@@ -604,63 +603,6 @@
   [state]
   (transit/write kv-transit-writer state))
 
-(def ^:private keychain-service "Logseq E2EE")
-
-(defn- <save-secret-text!
-  [kv key text]
-  (-> (p/let [_ (.setPassword ^js keytar keychain-service key text)]
-        nil)
-      (p/catch (fn [e]
-                 (log/warn :db-worker/keychain-save-failed {:error e
-                                                            :key key})
-                 ((:set! kv) key text)))))
-
-(defn- <read-secret-text
-  [kv key]
-  (-> (p/let [secret (.getPassword ^js keytar keychain-service key)]
-        secret)
-      (p/catch (fn [e]
-                 (log/warn :db-worker/keychain-read-failed {:error e
-                                                            :key key})
-                 ((:get kv) key)))))
-
-(defn- <delete-secret-text!
-  [kv key]
-  (-> (p/let [_ (.deletePassword ^js keytar keychain-service key)]
-        nil)
-      (p/catch (fn [e]
-                 (log/warn :db-worker/keychain-delete-failed {:error e
-                                                              :key key})
-                 ((:set! kv) key nil)))))
-
-(defn- truthy-env?
-  [value]
-  (contains? #{"1" "true" "yes" "on"}
-             (string/lower-case (string/trim (str (or value ""))))))
-
-(defn- use-keychain-for-owner?
-  [owner-source]
-  (not (and (= :cli owner-source)
-            (truthy-env? (gobj/get (.-env js/process) "CLI_E2E_TEST")))))
-
-(defn- <save-secret-text-by-owner!
-  [kv owner-source key text]
-  (if (use-keychain-for-owner? owner-source)
-    (<save-secret-text! kv key text)
-    ((:set! kv) key text)))
-
-(defn- <read-secret-text-by-owner
-  [kv owner-source key]
-  (if (use-keychain-for-owner? owner-source)
-    (<read-secret-text kv key)
-    ((:get kv) key)))
-
-(defn- <delete-secret-text-by-owner!
-  [kv owner-source key]
-  (if (use-keychain-for-owner? owner-source)
-    (<delete-secret-text! kv key)
-    ((:set! kv) key nil)))
-
 (defn- kv-store
   [data-dir]
   (let [kv-path (node-path/join data-dir "kv-store.json")
@@ -748,12 +690,6 @@
                 :transaction (fn [db f] (.transaction db f))
                 :backup-db (fn [^js db path]
                              (.backup db path))}
-       :crypto {:save-secret-text! (fn [key text]
-                                     (<save-secret-text-by-owner! kv owner-source key text))
-                :read-secret-text (fn [key]
-                                    (<read-secret-text-by-owner kv owner-source key))
-                :delete-secret-text! (fn [key]
-                                       (<delete-secret-text-by-owner! kv owner-source key))}
        :timers {:set-interval! (fn [f ms] (js/setInterval f ms))}}
        vector-embedding-enabled?
        (assoc :embedding {:model-id embedding-model-id

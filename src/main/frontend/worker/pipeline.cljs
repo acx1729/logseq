@@ -396,7 +396,7 @@
 (defn- gen-created-by-block
   [decoded-id-token]
   (let [user-uuid (:sub decoded-id-token)
-        user-name (:cognito:username decoded-id-token)
+        user-name (:username decoded-id-token)
         email (:email decoded-id-token)
         now (common-util/time-ms)]
     {:block/uuid (uuid user-uuid)

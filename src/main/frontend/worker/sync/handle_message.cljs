@@ -356,19 +356,11 @@
         ;; (log/info ::handle-pull-remote-txs-count {:count (count remote-txs)})
         (when (seq remote-txs)
           (->
-           (p/let [graph-e2ee? (sync-crypt/graph-e2ee? repo)
-                   ;; _ (log/info ::handle-pull-request-aes-key {})
-                   aes-key (sync-crypt/<ensure-graph-aes-key repo (:graph-id client))
-                   ;; _ (when (some? aes-key)
-                   ;;     (log/info ::handle-pull-request-aes-key-success {}))
-                   _ (when (and graph-e2ee? (nil? aes-key))
-                       (fail-fast :db-sync/missing-field {:repo repo :field :aes-key}))
-                   remote-txs* (if aes-key
-                                 (p/all (mapv (fn [{:keys [tx-data] :as remote-tx}]
-                                                (p/let [tx-data* (sync-crypt/<decrypt-tx-data aes-key tx-data)]
-                                                  (assoc remote-tx :tx-data tx-data*)))
-                                              remote-txs))
-                                 (p/resolved remote-txs))
+           (p/let [aes-key (sync-crypt/<ensure-graph-aes-key (:graph-id client))
+                   remote-txs* (p/all (mapv (fn [{:keys [tx-data] :as remote-tx}]
+                                              (p/let [tx-data* (sync-crypt/<decrypt-tx-data aes-key tx-data)]
+                                                (assoc remote-tx :tx-data tx-data*)))
+                                            remote-txs))
                    _ (try
                        (sync-apply/apply-remote-txs! repo client remote-txs*)
                        (catch :default e

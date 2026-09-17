@@ -36,7 +36,6 @@
    [frontend.worker.state :as worker-state]
    [frontend.worker.sync :as db-sync]
    [frontend.worker.sync.client-op :as client-op]
-   [frontend.worker.sync.crypt :as sync-crypt]
    [frontend.worker.sync.download :as sync-download]
    [frontend.worker.thread-atom]
    [frontend.worker.ui-request :as ui-request]
@@ -895,23 +894,23 @@
 (def-thread-api :thread-api/unsafe-unlink-db
   [repo]
   (p/let [pool (<get-opfs-pool repo)
-          _ (sync-crypt/cancel-ui-requests! {:reason :unsafe-unlink-db
-                                             :repo repo})
+          _ (ui-request/cancel-all! {:reason :unsafe-unlink-db
+                                     :repo repo})
           _ (close-db! repo)
           _result (remove-vfs! pool)]
     nil))
 
 (def-thread-api :thread-api/close-db
   [repo]
-  (sync-crypt/cancel-ui-requests! {:reason :close-db
-                                   :repo repo})
+  (ui-request/cancel-all! {:reason :close-db
+                           :repo repo})
   (close-db! repo)
   nil)
 
 (def-thread-api :thread-api/db-sync-close-db
   [repo]
-  (sync-crypt/cancel-ui-requests! {:reason :db-sync-close-db
-                                   :repo repo})
+  (ui-request/cancel-all! {:reason :db-sync-close-db
+                           :repo repo})
   (close-db! repo))
 
 (def-thread-api :thread-api/db-sync-invalidate-search-db
@@ -923,8 +922,8 @@
   (db-sync/rehydrate-large-titles-from-db! repo graph-id))
 
 (def-thread-api :thread-api/db-sync-import-prepare
-  [repo reset? graph-id graph-e2ee? & [total-datoms]]
-  (sync-download/prepare-import! repo reset? graph-id graph-e2ee? total-datoms))
+  [repo reset? graph-id & [total-datoms]]
+  (sync-download/prepare-import! repo reset? graph-id total-datoms))
 
 (def-thread-api :thread-api/db-sync-import-rows-chunk
   [rows graph-id import-id]

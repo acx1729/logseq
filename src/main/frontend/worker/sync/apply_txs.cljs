@@ -252,7 +252,6 @@
                                :fail-fast-f fail-fast
                                :decrypt-text-value-f sync-crypt/<decrypt-text-value})))
           :get-conn-f worker-state/get-datascript-conn
-          :graph-e2ee?-f sync-crypt/graph-e2ee?
           :ensure-graph-aes-key-f sync-crypt/<ensure-graph-aes-key
           :fail-fast-f fail-fast)))
 
@@ -964,10 +963,8 @@
               (log/info :db-sync/drop-tx-ids {:tx-ids drop-tx-ids
                                               :drops drop-txs})
               (mark-pending-txs-false! repo drop-tx-ids))
-            (-> (p/let [aes-key (when (and (seq tx-entries) (sync-crypt/graph-e2ee? repo))
-                                  (sync-crypt/<ensure-graph-aes-key repo (:graph-id client)))
-                        _ (when (and (seq tx-entries) (sync-crypt/graph-e2ee? repo) (nil? aes-key))
-                            (fail-fast :db-sync/missing-field {:repo repo :field :aes-key}))
+            (-> (p/let [aes-key (when (seq tx-entries)
+                                  (sync-crypt/<ensure-graph-aes-key (:graph-id client)))
                         tx-entries* (p/all
                                      (mapv (fn [{:keys [tx-data] :as tx-entry}]
                                              (p/let [tx-data* (offload-large-titles
@@ -975,9 +972,7 @@
                                                                {:repo repo
                                                                 :graph-id (:graph-id client)
                                                                 :aes-key aes-key})
-                                                     tx-data** (if aes-key
-                                                                 (sync-crypt/<encrypt-tx-data aes-key tx-data*)
-                                                                 tx-data*)]
+                                                     tx-data** (sync-crypt/<encrypt-tx-data aes-key tx-data*)]
                                                (assoc tx-entry :tx-data tx-data**)))
                                            tx-entries))
                         payload (mapv (fn [{:keys [tx-id tx-data outliner-op]}]

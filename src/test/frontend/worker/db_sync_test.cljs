@@ -707,7 +707,8 @@
                  client-ops-conn
                  (fn []
                    (-> (p/with-redefs [worker-state/online? (constantly true)
-                                        sync-crypt/graph-e2ee? (constantly false)]
+                                        sync-crypt/<ensure-graph-aes-key (fn [_graph-id] (p/resolved nil))
+                                        sync-crypt/<encrypt-tx-data (fn [_aes-key tx-data] (p/resolved tx-data))]
                          (reset! sync-apply/*repo->latest-remote-tx {test-repo 0})
                          (client-op/update-local-tx test-repo 0)
                          (seed-client-op-txs!
@@ -767,7 +768,8 @@
                  client-ops-conn
                  (fn []
                    (-> (p/with-redefs [worker-state/online? (constantly true)
-                                        sync-crypt/graph-e2ee? (constantly false)]
+                                        sync-crypt/<ensure-graph-aes-key (fn [_graph-id] (p/resolved nil))
+                                        sync-crypt/<encrypt-tx-data (fn [_aes-key tx-data] (p/resolved tx-data))]
                          (reset! sync-apply/*repo->latest-remote-tx {test-repo 0})
                          (client-op/update-local-tx test-repo 0)
                          (seed-client-op-txs!
@@ -834,7 +836,8 @@
                  client-ops-conn
                  (fn []
                    (-> (p/with-redefs [worker-state/online? (constantly true)
-                                        sync-crypt/graph-e2ee? (constantly false)]
+                                        sync-crypt/<ensure-graph-aes-key (fn [_graph-id] (p/resolved nil))
+                                        sync-crypt/<encrypt-tx-data (fn [_aes-key tx-data] (p/resolved tx-data))]
                          (reset! sync-apply/*repo->latest-remote-tx {test-repo 0})
                          (client-op/update-local-tx test-repo 0)
                          (seed-client-op-txs!
@@ -892,7 +895,8 @@
                  client-ops-conn
                  (fn []
                    (-> (p/with-redefs [worker-state/online? (constantly true)
-                                        sync-crypt/graph-e2ee? (constantly false)]
+                                        sync-crypt/<ensure-graph-aes-key (fn [_graph-id] (p/resolved nil))
+                                        sync-crypt/<encrypt-tx-data (fn [_aes-key tx-data] (p/resolved tx-data))]
                          (reset! sync-apply/*repo->latest-remote-tx {test-repo 0})
                          (client-op/update-local-tx test-repo 0)
                          (seed-client-op-txs!
@@ -947,7 +951,8 @@
                  client-ops-conn
                  (fn []
                    (-> (p/with-redefs [worker-state/online? (constantly true)
-                                        sync-crypt/graph-e2ee? (constantly false)]
+                                        sync-crypt/<ensure-graph-aes-key (fn [_graph-id] (p/resolved nil))
+                                        sync-crypt/<encrypt-tx-data (fn [_aes-key tx-data] (p/resolved tx-data))]
                          (reset! sync-apply/*repo->latest-remote-tx {test-repo 0})
                          (client-op/update-local-tx test-repo 0)
                          (seed-client-op-txs!
@@ -1005,7 +1010,8 @@
                  client-ops-conn
                  (fn []
                    (-> (p/with-redefs [worker-state/online? (constantly true)
-                                        sync-crypt/graph-e2ee? (constantly false)]
+                                        sync-crypt/<ensure-graph-aes-key (fn [_graph-id] (p/resolved nil))
+                                        sync-crypt/<encrypt-tx-data (fn [_aes-key tx-data] (p/resolved tx-data))]
                          (reset! sync-apply/*repo->latest-remote-tx {test-repo 0})
                          (client-op/update-local-tx test-repo 0)
                          (seed-client-op-txs!
@@ -1068,7 +1074,8 @@
              client-ops-conn
              (fn []
                (-> (p/with-redefs [worker-state/online? (constantly true)
-                                    sync-crypt/graph-e2ee? (constantly false)]
+                                    sync-crypt/<ensure-graph-aes-key (fn [_graph-id] (p/resolved nil))
+                                    sync-crypt/<encrypt-tx-data (fn [_aes-key tx-data] (p/resolved tx-data))]
                      (reset! sync-apply/*repo->latest-remote-tx {test-repo 0})
                      (client-op/update-local-tx test-repo 0)
                      (seed-client-op-txs!
@@ -1169,7 +1176,8 @@
                                     client-ops-conn
                                     (get-client-ops-conn repo')))
                                 sync-util/get-graph-id (fn [_repo] "graph-1")
-                                sync-crypt/graph-e2ee? (constantly false)
+                                sync-crypt/<ensure-graph-aes-key (fn [_graph-id] (p/resolved nil))
+                                sync-crypt/<encrypt-tx-data (fn [_aes-key tx-data] (p/resolved tx-data))
                                 worker-state/online? (constantly true)
                                 shared-service/broadcast-to-clients! (fn [& _]
                                                                        (swap! broadcasts inc))]
@@ -1989,8 +1997,7 @@
         (fn []
           (reset! db-sync/*repo->latest-remote-tx {})
           (with-redefs [sync-apply/flush-pending! (fn [& _] nil)
-                        sync-assets/enqueue-asset-sync! (fn [& _] nil)
-                        sync-crypt/graph-e2ee? (constantly true)]
+                        sync-assets/enqueue-asset-sync! (fn [& _] nil)]
             (try
               (is (= :ok
                      (try
@@ -2159,7 +2166,6 @@
    :kv {}
    :broadcast {}
    :websocket {}
-   :crypto {}
    :timers {}
    :sqlite {}})
 
