@@ -336,9 +336,7 @@
               (http/unauthorized))
 
             :else
-            (p/let [claims (auth/auth-claims request env)
-                    _ (when claims
-                        (index/<user-upsert! db claims))]
+            (p/let [claims (auth/auth-claims request env)]
               (if (nil? claims)
                 (http/unauthorized)
                 (p/let [user-id (aget claims "sub")

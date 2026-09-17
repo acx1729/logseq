@@ -20,13 +20,6 @@
 (defn- truthy-env? [v]
   (contains? #{"1" "true" "yes" "on"} (string/lower-case v)))
 
-(def default-siwe-redirect-uris
-  "Callbacks of the clients this server signs in: the desktop deep link and
-  the CLI's loopback listener."
-  ["logseq://auth/callback"
-   "http://localhost:8765/auth/callback"
-   "http://127.0.0.1:8765/auth/callback"])
-
 (defn- without-nils [m]
   (into {} (remove (comp nil? val)) m))
 
@@ -59,9 +52,10 @@
       :bao-secret-id-file (env-value env "BAO_SECRET_ID_FILE")
       :siwe-domains (parse-list (env-value env "DB_SYNC_SIWE_DOMAINS"))
       :siwe-chain-ids (parse-list (env-value env "DB_SYNC_SIWE_CHAIN_IDS"))
-      :siwe-redirect-uris (parse-list (env-value env "DB_SYNC_SIWE_REDIRECT_URIS"))
       :siwe-statement (env-value env "DB_SYNC_SIWE_STATEMENT")
-      :app-name (env-value env "DB_SYNC_APP_NAME")})))
+      :app-name (env-value env "DB_SYNC_APP_NAME")
+      :rpc-urls (parse-list (env-value env "DB_SYNC_RPC_URLS"))
+      :walletconnect-project-id (env-value env "DB_SYNC_WALLETCONNECT_PROJECT_ID")})))
 
 (def ^:private allowed-config-keys
   [:port :base-url :data-dir :storage-driver :assets-driver :log-level :admin-token :trust-proxy?
@@ -69,7 +63,7 @@
    :key-store :key-store-dir
    :bao-addr :bao-transit-mount :bao-transit-key :bao-kv-mount :bao-kv-prefix
    :bao-token :bao-role-id :bao-secret-id :bao-secret-id-file
-   :siwe-domains :siwe-chain-ids :siwe-redirect-uris :siwe-statement :app-name])
+   :siwe-domains :siwe-chain-ids :siwe-statement :app-name :rpc-urls :walletconnect-project-id])
 
 (defn- fail! [message]
   (throw (js/Error. message)))
@@ -120,11 +114,51 @@
 
     (fail! (str "DB_SYNC_KEY_STORE must be file or openbao, got: " (pr-str key-store)))))
 
-(defn- parse-chain-ids [chain-ids]
+(defn- parse-chain-ids
+  "The EIP-155 chain ids sign-in messages may name; clients offer the same
+  chains in their wallet setup, so at least one is required."
+  [chain-ids]
   (let [parsed (mapv (fn [v] (parse-int v nil)) chain-ids)]
-    (when (some nil? parsed)
-      (fail! (str "DB_SYNC_SIWE_CHAIN_IDS must be integers, got: " (pr-str chain-ids))))
+    (when (or (empty? parsed) (some (fn [id] (or (nil? id) (not (pos? id)))) parsed))
+      (fail! (str "DB_SYNC_SIWE_CHAIN_IDS must list at least one positive integer, got: " (pr-str chain-ids))))
     parsed))
+
+(defn- parse-rpc-urls
+  "`DB_SYNC_RPC_URLS` entries of the form `<chain id>=<url>`, or a map of chain
+  id to URL from overrides, each for an accepted chain id."
+  [rpc-urls chain-ids]
+  (let [pairs (if (map? rpc-urls)
+                (seq rpc-urls)
+                (map (fn [entry]
+                       (let [[id url] (string/split entry #"=" 2)]
+                         [(parse-int id nil) url]))
+                     rpc-urls))
+        accepted (set chain-ids)]
+    (into {}
+          (map (fn [[chain-id url]]
+                 (when (nil? chain-id)
+                   (fail! (str "DB_SYNC_RPC_URLS entries must be <chain id>=<url>, got: " (pr-str rpc-urls))))
+                 (when-not (contains? accepted chain-id)
+                   (fail! (str "DB_SYNC_RPC_URLS names chain " chain-id " which is not in DB_SYNC_SIWE_CHAIN_IDS")))
+                 (when-not (and (string? url) (re-find #"^(https?|wss?)://" url))
+                   (fail! (str "DB_SYNC_RPC_URLS entry for chain " chain-id " must be an http(s) or ws(s) URL")))
+                 [chain-id url]))
+          pairs)))
+
+(defn- issuer-authority [issuer]
+  (try
+    (.-host (js/URL. issuer))
+    (catch :default _ nil)))
+
+(defn- validate-issuer-domain!
+  "Desktop, mobile and CLI clients sign messages naming the issuer's
+  authority, so the domain list must carry it."
+  [{:keys [token-issuer siwe-domains]}]
+  (let [authority (some-> (issuer-authority token-issuer) string/lower-case)]
+    (when (missing? authority)
+      (fail! "DB_SYNC_TOKEN_ISSUER must be an http(s) URL with a host"))
+    (when-not (contains? (set (map string/lower-case siwe-domains)) authority)
+      (fail! (str "DB_SYNC_SIWE_DOMAINS must include the issuer's host " authority)))))
 
 (defn normalize-config [overrides]
   (let [defaults {:port 8080
@@ -139,10 +173,10 @@
                   :bao-transit-key "logseq-token"
                   :bao-kv-mount "logseq"
                   :bao-kv-prefix "graphs"
-                  :siwe-chain-ids []
-                  :siwe-redirect-uris default-siwe-redirect-uris
+                  :siwe-chain-ids [1]
                   :siwe-statement "Sign in to Logseq"
-                  :app-name "Logseq"}
+                  :app-name "Logseq"
+                  :rpc-urls {}}
         merged (merge defaults (config-from-env) (without-nils overrides))
         storage-driver (string/lower-case (:storage-driver merged))
         assets-driver (string/lower-case (:assets-driver merged))
@@ -156,7 +190,8 @@
                       :key-store-dir (if (missing? (:key-store-dir merged))
                                        (node-path/join (:data-dir merged) "keys")
                                        (:key-store-dir merged))
-                      :siwe-chain-ids (parse-chain-ids (:siwe-chain-ids merged)))]
+                      :siwe-chain-ids (parse-chain-ids (:siwe-chain-ids merged)))
+        merged (assoc merged :rpc-urls (parse-rpc-urls (:rpc-urls merged) (:siwe-chain-ids merged)))]
     (when-not (#{"sqlite"} storage-driver)
       (fail! (str "unsupported storage driver: " storage-driver)))
     (when-not (#{"filesystem"} assets-driver)
@@ -170,8 +205,14 @@
       (fail! "DB_SYNC_TOKEN_TTL_S must be a positive number of seconds"))
     (when (empty? (:siwe-domains merged))
       (fail! "DB_SYNC_SIWE_DOMAINS must list at least one domain"))
-    (when (empty? (:siwe-redirect-uris merged))
-      (fail! "DB_SYNC_SIWE_REDIRECT_URIS must list at least one callback"))
+    (validate-issuer-domain! merged)
+    (when (missing? (:siwe-statement merged))
+      (fail! "DB_SYNC_SIWE_STATEMENT must not be blank"))
+    (when (missing? (:app-name merged))
+      (fail! "DB_SYNC_APP_NAME must not be blank"))
+    (when (and (some? (:walletconnect-project-id merged))
+               (missing? (:walletconnect-project-id merged)))
+      (fail! "DB_SYNC_WALLETCONNECT_PROJECT_ID must not be blank when set"))
     (validate-signer! merged)
     (validate-key-store! merged)
     (select-keys merged allowed-config-keys)))

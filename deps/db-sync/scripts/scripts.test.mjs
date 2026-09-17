@@ -31,9 +31,10 @@ function startAuthServer(service, db) {
         return;
       }
       if (url.pathname === "/auth/siwe" && req.method === "POST") {
-        const result = await service.signIn({ ip: req.socket.remoteAddress, body: parseBody(req.headers["content-type"], text) });
+        const identity = await service.verifySignIn({ ip: req.socket.remoteAddress, body: parseBody(req.headers["content-type"], text) });
+        const issued = await service.issueToken({ sub: identity.address, username: identity.username || identity.defaultUsername });
         res.writeHead(200, { "content-type": "application/json" });
-        res.end(JSON.stringify(result.kind === "code" ? { code: result.code } : service.tokenResponse(result)));
+        res.end(JSON.stringify(service.tokenResponse(issued)));
         return;
       }
       res.writeHead(404, { "content-type": "application/json" });
@@ -52,7 +53,7 @@ function makeService(keyFile, issuer, domain) {
   const db = new Database(":memory:");
   for (const migration of AUTH_MIGRATIONS) for (const statement of migration.statements) db.exec(statement);
   const service = createAuthService({
-    config: { issuer, audience: "logseq-sync", tokenTtlS: 3600, siweDomains: [domain], redirectUris: ["logseq://auth/callback"] },
+    config: { issuer, audience: "logseq-sync", tokenTtlS: 3600, siweDomains: [domain], siweChainIds: [1], siweStatement: "Sign in to Logseq", appName: "Logseq" },
     signer: fileSigner({ privateKeyPem: readFileSync(keyFile, "utf8") }),
     store: createAuthStore(db),
   });
@@ -82,7 +83,7 @@ test("mint-token produces a token the same key verifies, with the adapter's clai
   const opts = parseMintArgs(["--key-file", keyFile, "--issuer", "http://x", "--address", address]);
   assert.equal(opts.audience, "logseq-sync");
   assert.throws(() => parseMintArgs(["--key-file", keyFile]), /--issuer is required/);
-  assert.deepEqual(JSON.parse(authFileJson("t")), { provider: "siwe", "id-token": "t", "access-token": "t" });
+  assert.deepEqual(JSON.parse(authFileJson("t")), { "access-token": "t" });
   rmSync(dir, { recursive: true, force: true });
 });
 
@@ -93,10 +94,13 @@ test("siwe-login signs in against the auth routes and returns a verifiable token
   const { server, port } = await startAuthServer(...Object.values(makeService(keyFile, "http://127.0.0.1", "127.0.0.1")));
   try {
     const { service } = makeService(keyFile, "http://127.0.0.1", "127.0.0.1");
-    const result = await login({ server: `http://127.0.0.1:${port}`, domain: "127.0.0.1" });
+    const result = await login({ server: `http://127.0.0.1:${port}`, domain: "127.0.0.1", username: "CI runner" });
     assert.match(result.address, /^0x[0-9a-f]{40}$/);
     const claims = await service.verify(result.token);
     assert.equal(claims.sub, result.address);
+    assert.equal(claims.username, "CI runner");
+    const unnamed = await login({ server: `http://127.0.0.1:${port}`, domain: "127.0.0.1" });
+    assert.equal((await service.verify(unnamed.token)).username.length, 11);
     await assert.rejects(() => login({ server: `http://127.0.0.1:${port}`, domain: "evil.example" }), /siwe_domain_not_allowed/);
     const opts = parseLoginArgs(["--server", "http://127.0.0.1:1", "--chain-id", "10"]);
     assert.equal(opts.chainId, 10);

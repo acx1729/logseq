@@ -43,8 +43,9 @@ export async function mint({ keyFile, issuer, audience, address, ttlS, now = Dat
   return { token: await mintToken({ signer, claims }), claims };
 }
 
+/** The CLI's auth file: the token alone, as `logseq login` writes it. */
 export function authFileJson(token) {
-  return `${JSON.stringify({ provider: "siwe", "id-token": token, "access-token": token })}\n`;
+  return `${JSON.stringify({ "access-token": token })}\n`;
 }
 
 if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href) {

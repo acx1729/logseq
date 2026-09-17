@@ -43,8 +43,9 @@
   (let [cfg (normalize {})]
     (is (= "logseq-sync" (:token-audience cfg)))
     (is (= (* 30 24 60 60) (:token-ttl-s cfg)))
-    (is (= config/default-siwe-redirect-uris (:siwe-redirect-uris cfg)))
-    (is (= [] (:siwe-chain-ids cfg)))
+    (is (= [1] (:siwe-chain-ids cfg)))
+    (is (= {} (:rpc-urls cfg)))
+    (is (nil? (:walletconnect-project-id cfg)))
     (is (= "Sign in to Logseq" (:siwe-statement cfg)))
     (is (= "Logseq" (:app-name cfg)))
     (is (false? (:trust-proxy? cfg)))
@@ -85,7 +86,12 @@
   (is (re-find #"DB_SYNC_TOKEN_ISSUER" (failure-message #(normalize {:token-issuer "sync.example.test"}))))
   (is (re-find #"DB_SYNC_SIWE_DOMAINS" (failure-message #(normalize {:siwe-domains []}))))
   (is (re-find #"DB_SYNC_TOKEN_TTL_S" (failure-message #(normalize {:token-ttl-s 0}))))
-  (is (re-find #"DB_SYNC_SIWE_REDIRECT_URIS" (failure-message #(normalize {:siwe-redirect-uris []})))))
+  (is (re-find #"issuer's host localhost:8787" (failure-message #(normalize {:siwe-domains ["notes.example.test"]}))))
+  (is (= ["notes.example.test" "LOCALHOST:8787"]
+         (:siwe-domains (normalize {:siwe-domains ["notes.example.test" "LOCALHOST:8787"]}))))
+  (is (re-find #"DB_SYNC_SIWE_STATEMENT" (failure-message #(normalize {:siwe-statement " "}))))
+  (is (re-find #"DB_SYNC_APP_NAME" (failure-message #(normalize {:app-name ""}))))
+  (is (re-find #"DB_SYNC_WALLETCONNECT_PROJECT_ID" (failure-message #(normalize {:walletconnect-project-id " "})))))
 
 (deftest normalize-config-validates-signer-test
   (testing "file signer needs a key file"
@@ -108,4 +114,21 @@
 (deftest normalize-config-parses-chain-ids-test
   (is (= [1 10] (:siwe-chain-ids (normalize {:siwe-chain-ids ["1" "10"]}))))
   (is (= [1] (:siwe-chain-ids (normalize {:siwe-chain-ids [1]}))))
-  (is (re-find #"DB_SYNC_SIWE_CHAIN_IDS" (failure-message #(normalize {:siwe-chain-ids ["mainnet"]})))))
+  (is (re-find #"DB_SYNC_SIWE_CHAIN_IDS" (failure-message #(normalize {:siwe-chain-ids ["mainnet"]}))))
+  (is (re-find #"DB_SYNC_SIWE_CHAIN_IDS" (failure-message #(normalize {:siwe-chain-ids ["0"]}))))
+  (is (re-find #"DB_SYNC_SIWE_CHAIN_IDS" (failure-message #(normalize {:siwe-chain-ids []})))))
+
+(deftest normalize-config-parses-rpc-urls-test
+  (is (= {1 "https://rpc.example.test"}
+         (:rpc-urls (normalize {:rpc-urls ["1=https://rpc.example.test"]}))))
+  (is (= {1 "https://rpc.example.test" 10 "wss://optimism.example.test"}
+         (:rpc-urls (normalize {:siwe-chain-ids ["1" "10"]
+                                :rpc-urls {1 "https://rpc.example.test"
+                                           10 "wss://optimism.example.test"}}))))
+  (is (re-find #"not in DB_SYNC_SIWE_CHAIN_IDS"
+               (failure-message #(normalize {:rpc-urls ["10=https://rpc.example.test"]}))))
+  (is (re-find #"http\(s\) or ws\(s\) URL"
+               (failure-message #(normalize {:rpc-urls ["1=rpc.example.test"]}))))
+  (is (re-find #"<chain id>=<url>"
+               (failure-message #(normalize {:rpc-urls ["https://rpc.example.test"]}))))
+  (is (= "wc-project" (:walletconnect-project-id (normalize {:walletconnect-project-id "wc-project"})))))

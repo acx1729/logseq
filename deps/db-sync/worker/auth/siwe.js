@@ -1,24 +1,15 @@
 "use strict";
 
+const crypto = require("node:crypto");
 const { getAddress, recoverMessageAddress } = require("viem");
 const { createSiweMessage, parseSiweMessage, validateSiweMessage } = require("viem/siwe");
 const { AuthError } = require("./errors");
 
 const ISSUED_AT_FUTURE_SKEW_MS = 5 * 60 * 1000;
 
-/**
- * EIP-4361 text for the fields the hosted sign-in page fills in. Kept free of
- * dependencies because its source is inlined into that page; the output is
- * byte-identical to viem's `createSiweMessage` for the same fields.
- */
-function formatSiweMessage(fields) {
-  var origin = fields.scheme ? fields.scheme + "://" + fields.domain : fields.domain;
-  var statement = fields.statement ? fields.statement + "\n" : "";
-  var text = origin + " wants you to sign in with your Ethereum account:\n" + fields.address + "\n\n" + statement +
-    "\nURI: " + fields.uri + "\nVersion: 1\nChain ID: " + fields.chainId + "\nNonce: " + fields.nonce +
-    "\nIssued At: " + fields.issuedAt;
-  if (fields.expirationTime) text += "\nExpiration Time: " + fields.expirationTime;
-  return text;
+/** 32 hexadecimal characters: alphanumeric and long enough for EIP-4361. */
+function randomNonce() {
+  return crypto.randomBytes(16).toString("hex");
 }
 
 function shortAddress(address) {
@@ -28,11 +19,14 @@ function shortAddress(address) {
 
 /**
  * Verify a signed EIP-4361 message. `domains` is a Set of allowed lowercase
- * authorities, `chainIds` a Set of allowed EIP-155 ids or null for any chain.
- * Resolves to the parsed identity; throws AuthError when the sign-in must be
- * refused. The nonce is returned for the caller to consume exactly once.
+ * authorities and `chainIds` a Set of allowed EIP-155 ids. Resolves to the
+ * parsed identity; throws AuthError when the sign-in must be refused. The
+ * nonce is returned for the caller to consume exactly once.
  */
-async function verifySiweSignIn({ message, signature, domains, chainIds = null, nowMs = Date.now() }) {
+async function verifySiweSignIn({ message, signature, domains, chainIds, nowMs = Date.now() }) {
+  if (!(domains instanceof Set) || domains.size === 0 || !(chainIds instanceof Set) || chainIds.size === 0) {
+    throw new Error("verifySiweSignIn needs non-empty domain and chain id sets");
+  }
   if (typeof message !== "string" || message === "" || typeof signature !== "string" || !/^0x[0-9a-fA-F]+$/.test(signature)) {
     throw new AuthError("invalid_request", "message and signature are required", 400);
   }
@@ -44,7 +38,7 @@ async function verifySiweSignIn({ message, signature, domains, chainIds = null, 
   if (!domains.has(parsed.domain.toLowerCase())) {
     throw new AuthError("siwe_domain_not_allowed", "message domain is not served by this server", 400);
   }
-  if (chainIds && !chainIds.has(parsed.chainId)) {
+  if (!chainIds.has(parsed.chainId)) {
     throw new AuthError("siwe_chain_not_allowed", "message chain id is not accepted", 400);
   }
   if (!validateSiweMessage({ message: parsed, time: new Date(nowMs) })) {
@@ -73,4 +67,4 @@ async function verifySiweSignIn({ message, signature, domains, chainIds = null, 
   };
 }
 
-module.exports = { createSiweMessage, formatSiweMessage, parseSiweMessage, shortAddress, verifySiweSignIn };
+module.exports = { createSiweMessage, parseSiweMessage, randomNonce, shortAddress, verifySiweSignIn };

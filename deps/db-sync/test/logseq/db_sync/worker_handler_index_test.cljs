@@ -80,8 +80,6 @@
                env #js {"DB" #js {}}]
            (-> (p/with-redefs [auth/auth-claims (fn [_request _env]
                                                   (p/resolved #js {"sub" "user-2"}))
-                               index/<user-upsert! (fn [& _]
-                                                     (throw (ex-info "should-not-upsert" {})))
                                index/<user-has-access-to-graph? (fn [_db _graph-id _user-id]
                                                                   (p/resolved true))]
                  (p/let [result (index-handler/graph-access-response-with-timing request env "graph-2")]

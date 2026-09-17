@@ -2,18 +2,24 @@
 
 const { AuthError } = require("./errors");
 const { createVerifier, mintToken } = require("./jwt");
-const pkce = require("./pkce");
-const { renderSignInPage } = require("./page");
 const { createRateLimiter } = require("./ratelimit");
-const { shortAddress, verifySiweSignIn } = require("./siwe");
+const { randomNonce, shortAddress, verifySiweSignIn } = require("./siwe");
 
 const SCOPE = "logseq/read logseq/write";
-const STATE_RE = /^[\x21-\x7e]{1,512}$/;
+const USERNAME_MAX_LENGTH = 64;
+const USERNAME_RE = /^[^\p{Cc}\u2028\u2029]{1,64}$/u;
+const NONCE_TTL_MS = 5 * 60 * 1000;
 const DEFAULT_RATE_LIMITS = {
   nonce: { limit: 120, windowMs: 60 * 1000 },
   siwe: { limit: 30, windowMs: 60 * 1000 },
-  token: { limit: 30, windowMs: 60 * 1000 },
 };
+
+function configString(value, name) {
+  if (typeof value !== "string" || value.trim() === "") {
+    throw new Error(`auth config: ${name} is required`);
+  }
+  return value;
+}
 
 function requireString(value, code, message) {
   if (typeof value !== "string" || value === "") {
@@ -22,62 +28,101 @@ function requireString(value, code, message) {
   return value;
 }
 
-/**
- * Parse a request body as JSON or as application/x-www-form-urlencoded into a
- * plain object of string values. Everything else is refused.
- */
+/** Parse a JSON request body into a plain object. Everything else is refused. */
 function parseBody(contentType, text) {
   const type = String(contentType || "").split(";")[0].trim().toLowerCase();
-  if (type === "application/x-www-form-urlencoded") {
-    const params = new URLSearchParams(text || "");
-    const body = {};
-    for (const [key, value] of params) body[key] = value;
-    return body;
+  if (type !== "application/json") {
+    throw new AuthError("unsupported_media_type", "request body must be application/json", 415);
   }
-  if (type === "application/json" || type === "") {
-    if (!text) return {};
-    let parsed;
-    try {
-      parsed = JSON.parse(text);
-    } catch {
-      throw new AuthError("invalid_request", "request body is not valid JSON", 400);
-    }
-    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-      throw new AuthError("invalid_request", "request body must be a JSON object", 400);
-    }
-    return parsed;
+  if (!text) return {};
+  let parsed;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new AuthError("invalid_request", "request body is not valid JSON", 400);
   }
-  throw new AuthError("unsupported_media_type", "unsupported request content type", 415);
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new AuthError("invalid_request", "request body must be a JSON object", 400);
+  }
+  return parsed;
 }
 
-function toSet(values, transform) {
-  return new Set((values || []).map(transform));
+/**
+ * The display name a sign-in may carry: absent, or 1 to 64 characters with
+ * surrounding whitespace removed and no control characters.
+ */
+function normalizeUsername(value) {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "string") {
+    throw new AuthError("invalid_request", "username must be a string", 400);
+  }
+  const trimmed = value.trim();
+  if (!USERNAME_RE.test(trimmed)) {
+    throw new AuthError(
+      "invalid_username",
+      `username must be 1 to ${USERNAME_MAX_LENGTH} characters without control characters`,
+      400,
+    );
+  }
+  return trimmed;
+}
+
+function parseChainIds(values) {
+  const ids = new Set();
+  for (const value of values || []) {
+    const id = Number(value);
+    if (!Number.isInteger(id) || id <= 0) {
+      throw new Error(`auth config: chain id ${JSON.stringify(value)} is not a positive integer`);
+    }
+    ids.add(id);
+  }
+  if (ids.size === 0) {
+    throw new Error("auth config: at least one SIWE chain id is required");
+  }
+  return ids;
+}
+
+function parseRpcUrls(value, chainIds) {
+  const urls = {};
+  for (const [key, url] of Object.entries(value || {})) {
+    const id = Number(key);
+    if (!chainIds.has(id)) {
+      throw new Error(`auth config: rpc url for chain ${key} which is not an accepted chain id`);
+    }
+    if (typeof url !== "string" || !/^(https?|wss?):\/\//.test(url)) {
+      throw new Error(`auth config: rpc url for chain ${key} must be an http(s) or ws(s) URL`);
+    }
+    urls[String(id)] = url;
+  }
+  return urls;
 }
 
 /**
  * The sign-in service behind /auth/*. Holds no request-handling code: the
  * adapter maps its results and AuthErrors to HTTP responses.
  *
- * config: { issuer, audience, tokenTtlS, siweDomains, siweChainIds, redirectUris,
- *           siweStatement, appName, nonceTtlMs, codeTtlMs, rateLimits }
+ * config: { issuer, audience, tokenTtlS, siweDomains, siweChainIds, siweStatement,
+ *           appName, rpcUrls, walletConnectProjectId, nonceTtlMs, rateLimits }
  */
 function createAuthService({ config, signer, store, now = Date.now }) {
-  const issuer = requireString(config.issuer, "config", "issuer is required");
-  const audience = requireString(config.audience, "config", "audience is required");
+  const issuer = configString(config.issuer, "issuer");
+  const audience = configString(config.audience, "audience");
   const tokenTtlS = Number(config.tokenTtlS);
   if (!Number.isInteger(tokenTtlS) || tokenTtlS <= 0) {
-    throw new Error("token ttl must be a positive integer of seconds");
+    throw new Error("auth config: token ttl must be a positive integer of seconds");
   }
-  const domains = toSet(config.siweDomains, (domain) => String(domain).toLowerCase());
+  const domains = new Set((config.siweDomains || []).map((domain) => String(domain).toLowerCase()));
   if (domains.size === 0) {
-    throw new Error("at least one SIWE domain is required");
+    throw new Error("auth config: at least one SIWE domain is required");
   }
-  const chainIds = config.siweChainIds && config.siweChainIds.length ? toSet(config.siweChainIds, Number) : null;
-  const redirectUris = toSet(config.redirectUris, String);
-  const statement = config.siweStatement || "Sign in to Logseq";
-  const appName = config.appName || "Logseq";
-  const nonceTtlMs = config.nonceTtlMs || 5 * 60 * 1000;
-  const codeTtlMs = config.codeTtlMs || 5 * 60 * 1000;
+  const chainIds = parseChainIds(config.siweChainIds);
+  const statement = configString(config.siweStatement, "siweStatement");
+  const appName = configString(config.appName, "appName");
+  const rpcUrls = parseRpcUrls(config.rpcUrls, chainIds);
+  const walletConnectProjectId = config.walletConnectProjectId === undefined || config.walletConnectProjectId === null
+    ? null
+    : configString(config.walletConnectProjectId, "walletConnectProjectId");
+  const nonceTtlMs = config.nonceTtlMs || NONCE_TTL_MS;
   const rateLimits = Object.assign({}, DEFAULT_RATE_LIMITS, config.rateLimits || {});
   const limiters = {};
   for (const [name, spec] of Object.entries(rateLimits)) {
@@ -91,52 +136,36 @@ function createAuthService({ config, signer, store, now = Date.now }) {
     }
   }
 
-  function requireRedirectUri(value) {
-    const uri = requireString(value, "invalid_redirect_uri", "redirect_uri is required");
-    if (!redirectUris.has(uri)) {
-      throw new AuthError("invalid_redirect_uri", "redirect_uri is not allowed", 400);
-    }
-    return uri;
-  }
-
-  function requireChallenge(challenge, method) {
-    if (method !== "S256") {
-      throw new AuthError("invalid_request", "code_challenge_method must be S256", 400);
-    }
-    if (!pkce.validChallenge(challenge)) {
-      throw new AuthError("invalid_request", "code_challenge is malformed", 400);
-    }
-    return challenge;
-  }
-
-  function userForAddress(address) {
-    return { sub: address, username: shortAddress(address) };
-  }
-
-  async function issue(user) {
-    const iat = Math.floor(now() / 1000);
-    const exp = iat + tokenTtlS;
-    const claims = { iss: issuer, aud: audience, sub: user.sub, iat, exp, username: user.username, scope: SCOPE };
-    const token = await mintToken({ signer, claims });
-    return { token, claims, expiresIn: tokenTtlS };
+  /** What a client needs to build its wallet setup and sign-in message. */
+  function clientConfig() {
+    return {
+      issuer,
+      app_name: appName,
+      statement,
+      chain_ids: [...chainIds],
+      rpc_urls: Object.assign({}, rpcUrls),
+      walletconnect_project_id: walletConnectProjectId,
+    };
   }
 
   function issueNonce({ ip } = {}) {
     checkRate("nonce", ip);
     const t = now();
     store.prune(t);
-    const nonce = pkce.randomNonce();
+    const nonce = randomNonce();
     store.putNonce(nonce, t, t + nonceTtlMs);
     return { nonce, expires_at: Math.floor((t + nonceTtlMs) / 1000) };
   }
 
   /**
-   * Verify a signed message. With a PKCE challenge and redirect URI the result
-   * is a one-time code for /auth/token; without them it is a token directly.
+   * Verify a signed message and consume its nonce. Resolves to the signer's
+   * address, the chain it signed on, the display name the request carried
+   * (null when none) and the name to give a first-time user.
    */
-  async function signIn({ ip, body } = {}) {
+  async function verifySignIn({ ip, body } = {}) {
     checkRate("siwe", ip);
     const input = body || {};
+    const username = normalizeUsername(input.username);
     const identity = await verifySiweSignIn({
       message: input.message,
       signature: input.signature,
@@ -147,71 +176,33 @@ function createAuthService({ config, signer, store, now = Date.now }) {
     if (!store.consumeNonce(identity.nonce, now())) {
       throw new AuthError("invalid_nonce", "nonce is unknown, already used or expired", 400);
     }
-    const user = userForAddress(identity.address);
-    const codeFlow = input.code_challenge !== undefined || input.redirect_uri !== undefined;
-    if (codeFlow) {
-      const redirectUri = requireRedirectUri(input.redirect_uri);
-      const challenge = requireChallenge(input.code_challenge, input.code_challenge_method);
-      const code = pkce.randomCode();
-      const t = now();
-      store.putCode(pkce.hashCode(code), { userId: user.sub, codeChallenge: challenge, redirectUri }, t, t + codeTtlMs);
-      return { kind: "code", code, user, chainId: identity.chainId };
-    }
-    const issued = await issue(user);
-    return { kind: "token", token: issued.token, expiresIn: issued.expiresIn, claims: issued.claims, user, chainId: identity.chainId };
+    return {
+      address: identity.address,
+      chainId: identity.chainId,
+      username,
+      defaultUsername: shortAddress(identity.address),
+    };
   }
 
-  /** OAuth-style authorization-code exchange with PKCE, as the CLI performs it. */
-  async function exchangeCode({ ip, body } = {}) {
-    checkRate("token", ip);
-    const input = body || {};
-    if (input.grant_type !== "authorization_code") {
-      throw new AuthError("unsupported_grant_type", "grant_type must be authorization_code", 400);
+  /** Mint the session token of a signed-in user. */
+  async function issueToken({ sub, username }) {
+    if (typeof sub !== "string" || sub === "" || typeof username !== "string" || username === "") {
+      throw new Error("issueToken needs the user's address and display name");
     }
-    if (input.client_id !== undefined && input.client_id !== audience) {
-      throw new AuthError("invalid_client", "client_id is not accepted", 400);
-    }
-    const code = requireString(input.code, "invalid_grant", "code is required");
-    const record = store.consumeCode(pkce.hashCode(code), now());
-    if (!record) {
-      throw new AuthError("invalid_grant", "code is unknown, already used or expired", 400);
-    }
-    if (record.redirectUri !== input.redirect_uri) {
-      throw new AuthError("invalid_grant", "redirect_uri does not match the authorization request", 400);
-    }
-    if (!pkce.verifierMatches(input.code_verifier, record.codeChallenge)) {
-      throw new AuthError("invalid_grant", "code_verifier does not match the code_challenge", 400);
-    }
-    const issued = await issue(userForAddress(record.userId));
-    return { token: issued.token, expiresIn: issued.expiresIn, claims: issued.claims };
+    const iat = Math.floor(now() / 1000);
+    const exp = iat + tokenTtlS;
+    const claims = { iss: issuer, aud: audience, sub, iat, exp, username, scope: SCOPE };
+    const token = await mintToken({ signer, claims });
+    return { token, claims, expiresIn: tokenTtlS };
   }
 
   function tokenResponse(issued) {
     return {
       token_type: "Bearer",
       access_token: issued.token,
-      id_token: issued.token,
       expires_in: issued.expiresIn,
       scope: SCOPE,
     };
-  }
-
-  /** Validate the authorize-request query and render the hosted page. */
-  function signInPage(query) {
-    const input = query || {};
-    const state = requireString(input.state, "invalid_request", "state is required");
-    if (!STATE_RE.test(state)) {
-      throw new AuthError("invalid_request", "state is malformed", 400);
-    }
-    if (input.response_type !== undefined && input.response_type !== "code") {
-      throw new AuthError("invalid_request", "response_type must be code", 400);
-    }
-    if (input.client_id !== undefined && input.client_id !== audience) {
-      throw new AuthError("invalid_client", "client_id is not accepted", 400);
-    }
-    const redirectUri = requireRedirectUri(input.redirect_uri);
-    const codeChallenge = requireChallenge(input.code_challenge, input.code_challenge_method);
-    return renderSignInPage({ appName, statement, state, codeChallenge, redirectUri });
   }
 
   async function jwks() {
@@ -219,11 +210,11 @@ function createAuthService({ config, signer, store, now = Date.now }) {
   }
 
   return {
+    clientConfig,
     issueNonce,
-    signIn,
-    exchangeCode,
+    verifySignIn,
+    issueToken,
     tokenResponse,
-    signInPage,
     jwks,
     verify: verifier.verify,
     audience,
@@ -231,4 +222,4 @@ function createAuthService({ config, signer, store, now = Date.now }) {
   };
 }
 
-module.exports = { createAuthService, parseBody, SCOPE };
+module.exports = { createAuthService, normalizeUsername, parseBody, SCOPE, USERNAME_MAX_LENGTH };

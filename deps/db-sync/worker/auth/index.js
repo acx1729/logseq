@@ -3,18 +3,16 @@
 /**
  * Server library of the Logseq sync server, loaded by the ClojureScript
  * adapter at runtime: Sign-In with Ethereum (EIP-4361) verified with viem,
- * RS256 tokens signed by OpenBao Transit or a PEM key, an authorization-code
- * flow with PKCE for desktop and CLI, the hosted sign-in page, and the graph
- * key store backed by OpenBao KV or files.
+ * RS256 tokens signed by OpenBao Transit or a PEM key, the client
+ * configuration published to wallets, and the graph key store backed by
+ * OpenBao KV or files.
  */
 const { AuthError } = require("./errors");
 const jwt = require("./jwt");
 const keystore = require("./keystore");
 const openbao = require("./openbao");
-const page = require("./page");
-const pkce = require("./pkce");
 const { createRateLimiter } = require("./ratelimit");
-const { createAuthService, parseBody, SCOPE } = require("./service");
+const { createAuthService, normalizeUsername, parseBody, SCOPE, USERNAME_MAX_LENGTH } = require("./service");
 const signers = require("./signers");
 const siwe = require("./siwe");
 const { AUTH_MIGRATIONS, createAuthStore } = require("./store");
@@ -24,6 +22,7 @@ module.exports = {
   AuthError,
   KeyExistsError: keystore.KeyExistsError,
   SCOPE,
+  USERNAME_MAX_LENGTH,
   createAuthService,
   createAuthStore,
   createKeyStore: keystore.createKeyStore,
@@ -38,8 +37,7 @@ module.exports = {
   decodeToken: jwt.decodeToken,
   mintToken: jwt.mintToken,
   verifyToken: jwt.verifyToken,
+  normalizeUsername,
   parseBody,
-  pkce,
-  renderSignInPage: page.renderSignInPage,
   siwe,
 };

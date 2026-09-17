@@ -23,30 +23,17 @@ test("nonces are single use and expire", () => {
   assert.equal(store.consumeNonce("unknown", 0), false);
 });
 
-test("codes are returned once with their record and expire", () => {
-  const store = createAuthStore(openDb());
-  const record = { userId: "0xabc", codeChallenge: "c", redirectUri: "logseq://auth/callback" };
-  store.putCode("h1", record, 1000, 2000);
-  assert.deepEqual(store.consumeCode("h1", 1500), record);
-  assert.equal(store.consumeCode("h1", 1500), null);
-  store.putCode("h2", record, 1000, 2000);
-  assert.equal(store.consumeCode("h2", 2500), null);
-  assert.equal(store.consumeCode("h2", 1500), null);
-});
-
-test("prune removes expired rows only", () => {
+test("prune removes expired nonces only", () => {
   const db = openDb();
   const store = createAuthStore(db);
   store.putNonce("old", 0, 10);
   store.putNonce("new", 0, 100);
-  store.putCode("old", { userId: "u", codeChallenge: "c", redirectUri: "r" }, 0, 10);
   store.prune(50);
   assert.equal(db.prepare("select count(*) as n from auth_nonces").get().n, 1);
-  assert.equal(db.prepare("select count(*) as n from auth_codes").get().n, 0);
   assert.equal(store.consumeNonce("new", 50), true);
 });
 
-test("migration statements are idempotent and portable", () => {
+test("migrations are idempotent, portable and leave no code table behind", () => {
   const db = openDb();
   for (const migration of AUTH_MIGRATIONS) {
     assert.match(migration.id, /^\d{4}-[a-z-]+$/);
@@ -55,6 +42,9 @@ test("migration statements are idempotent and portable", () => {
       db.exec(statement);
     }
   }
+  const tables = db.prepare("select name from sqlite_master where type = 'table'").all().map((row) => row.name);
+  assert.ok(tables.includes("auth_nonces"));
+  assert.ok(!tables.includes("auth_codes"));
   const store = createAuthStore(db);
   store.putNonce("n", 0, 10);
   assert.equal(store.consumeNonce("n", 5), true);

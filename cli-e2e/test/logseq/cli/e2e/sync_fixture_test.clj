@@ -9,13 +9,13 @@
   (with-open [socket (java.net.ServerSocket. 0)]
     (.getLocalPort socket)))
 
-(deftest prepare-sync-config-writes-oauth-token-endpoint
+(deftest prepare-sync-config-writes-sync-endpoints
   (let [tmp-dir (fs/create-temp-dir {:prefix "logseq-cli-sync-config-test-"})
         auth-path (fs/path tmp-dir "auth.json")
         config-path (fs/path tmp-dir "cli.edn")
         script (fs/path "cli-e2e" "scripts" "prepare_sync_config.py")
         result (do
-                 (spit (str auth-path) "{\"refresh-token\":\"refresh-token\"}\n")
+                 (spit (str auth-path) "{\"access-token\":\"token\"}\n")
                  (shell/sh "python3" (str script)
                            "--output" (str config-path)
                            "--auth-path" (str auth-path)
@@ -26,9 +26,7 @@
       (let [config (slurp (str config-path))]
         (is (string/includes? config ":http-base \"http://127.0.0.1:18080\""))
         (is (string/includes? config ":ws-url \"ws://127.0.0.1:18080/sync/%s\""))
-        (is (string/includes? config ":oauth-token-endpoint \"http://127.0.0.1:18080/auth/token\""))
-        (is (string/includes? config ":oauth-authorize-endpoint \"http://127.0.0.1:18080/auth/siwe/start\""))
-        (is (string/includes? config ":oauth-client-id \"logseq-sync\"")))
+        (is (not (string/includes? config ":oauth"))))
       (finally
         (fs/delete-tree tmp-dir)))))
 

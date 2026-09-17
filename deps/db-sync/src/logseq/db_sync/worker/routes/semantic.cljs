@@ -388,12 +388,13 @@
                :oneOf [{:type "string"} {:type "number"} {:type "boolean"}
                        {:type "array" :items {:oneOf [{:type "string"} {:type "number"}]}}]})
     :securitySchemes
-    {:oauth {:type "oauth2"
-             :flows {:authorizationCode
-                     {:authorizationUrl (str issuer "/auth/siwe/start")
-                      :tokenUrl (str issuer "/auth/token")
-                      :scopes {:logseq/read "Read pages and blocks"
-                               :logseq/write "Create and edit pages and blocks"}}}}}}
+    {:bearer {:type "http"
+              :scheme "bearer"
+              :bearerFormat "JWT"
+              :description (str "A session token minted by POST " issuer "/auth/siwe after a wallet "
+                                "signature. Its scope claim carries logseq/read (read pages and blocks) "
+                                "and logseq/write (create and edit pages and blocks); each operation's "
+                                "x-required-scope names the one it needs.")}}}
    :paths
    (reduce (fn [paths {:keys [method path operation-id scope] :as operation}]
              (let [[summary description] (get operation-docs operation-id)]
@@ -402,7 +403,8 @@
                                 :summary summary
                                 :description description
                                 :parameters (operation-parameters operation)
-                                :security [{:oauth [scope]}]
+                                :security [{:bearer []}]
+                                :x-required-scope scope
                                 :responses (operation-responses operation-id)}
                          (request-body operation-id)
                          (assoc :requestBody (request-body operation-id))))))

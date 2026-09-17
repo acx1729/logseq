@@ -29,47 +29,64 @@ cd deps/db-sync
 ./start.sh
 ```
 
-Sign in without a browser wallet (a throwaway key is generated) and write the
-token where the CLI reads it:
+Sign in with a throwaway key and write the token where the CLI reads it
+(`~/logseq/auth.json` holds `{"access-token": "<token>"}`):
 
 ```bash
-node scripts/siwe-login.mjs --server http://127.0.0.1:8787 --write-auth ~/logseq/auth.json
+node scripts/siwe-login.mjs --server http://127.0.0.1:8787 --username "CI runner" --write-auth ~/logseq/auth.json
 ```
 
 Point the CLI at the server with these `cli.edn` keys:
 
 ```clojure
 {:http-base "http://127.0.0.1:8787"
- :ws-url "ws://127.0.0.1:8787/sync/%s"
- :oauth-authorize-endpoint "http://127.0.0.1:8787/auth/siwe/start"
- :oauth-token-endpoint "http://127.0.0.1:8787/auth/token"
- :oauth-client-id "logseq-sync"}
+ :ws-url "ws://127.0.0.1:8787/sync/%s"}
 ```
 
-`logseq login` then opens the hosted sign-in page in a browser, the wallet
-signs, and the page returns to the CLI's loopback callback.
+`logseq login` signs in with the identity the CLI holds in
+`~/logseq/identity.json`, creating one on first use; no browser is involved
+(see `docs/cli/logseq-cli.md`).
 
 ## Authentication
 
 Every credential is a token minted by this server after it verified a wallet
-signature. Tokens are RS256 JWTs whose `sub` is the lowercase wallet address;
-they live `DB_SYNC_TOKEN_TTL_S` seconds (30 days by default) and are renewed
-by signing in again. There are no refresh tokens.
+signature. Tokens are RS256 JWTs whose `sub` is the lowercase wallet address
+and whose `username` is the display name on file; they live
+`DB_SYNC_TOKEN_TTL_S` seconds (30 days by default) and are renewed by signing
+in again. There are no refresh tokens and no other sign-in path: the web app,
+desktop, mobile and CLI all post a signed message here, from a wallet the app
+holds or from an external one.
 
 | Route | Purpose |
 | --- | --- |
+| `GET /auth/config` | What a client needs before signing in: `issuer`, `app_name`, `statement`, `chain_ids`, `rpc_urls`, `walletconnect_project_id` |
 | `GET /auth/nonce` | A single-use nonce, valid five minutes |
-| `POST /auth/siwe` | Verifies `{message, signature}`; returns a token, or a one-time code when `code_challenge`, `code_challenge_method=S256` and an allow-listed `redirect_uri` are supplied |
-| `GET /auth/siwe/start` | Hosted sign-in page for the authorization-code flow (desktop and CLI): discovers EIP-6963 wallets, signs, and redirects to `redirect_uri` with `code` and `state` |
-| `POST /auth/token` | Exchanges `grant_type=authorization_code`, `code`, `redirect_uri`, `code_verifier` (JSON or form-encoded) for a token |
+| `POST /auth/siwe` | Verifies JSON `{message, signature, username?}` and returns `{token_type, access_token, expires_in, scope}` |
 | `GET /auth/jwks.json` | The public keys tokens are verified with |
 
 Verification checks the message domain against `DB_SYNC_SIWE_DOMAINS`, the
-chain id against `DB_SYNC_SIWE_CHAIN_IDS` when set, expiry and not-before,
-recovers the signer (externally owned accounts only), and consumes the nonce.
-The `/auth/*` routes are rate limited per client address; set
-`DB_SYNC_TRUST_PROXY=true` behind a reverse proxy so the address comes from
-`X-Forwarded-For`.
+chain id against `DB_SYNC_SIWE_CHAIN_IDS`, expiry and not-before, recovers
+the signer (externally owned accounts only), and consumes the nonce. Browser
+clients name their own origin as the message domain; desktop, mobile and CLI
+clients name the issuer, so `DB_SYNC_SIWE_DOMAINS` must include the issuer's
+host and the server refuses to start otherwise. The `/auth/*` routes are rate
+limited per client address; set `DB_SYNC_TRUST_PROXY=true` behind a reverse
+proxy so the address comes from `X-Forwarded-For`.
+
+Display names: a sign-in may carry `username` (1 to 64 characters, no control
+characters). The name is stored in `users.username` and returned in the
+token; a sign-in without one keeps the stored name, and a first sign-in
+without one records the short form of the address (`0x1234…abcd`). Members
+of a graph see each other's names through `GET /graphs/:graph-id/members`.
+
+Client configuration: `DB_SYNC_SIWE_CHAIN_IDS` lists the chains wallets may
+sign on (default `1`, Ethereum mainnet) and the same list is published to
+clients, which build their wallet setup from it. `DB_SYNC_RPC_URLS` overrides
+the public RPC endpoint a client uses per chain (`1=https://...,10=https://...`),
+for ENS lookups and chain switching; without it clients use each chain's
+public endpoint. `DB_SYNC_WALLETCONNECT_PROJECT_ID` enables WalletConnect
+wallets in the app's wallet picker; without it the app offers its built-in
+identity and browser-injected wallets only.
 
 Two signers exist:
 
@@ -120,7 +137,7 @@ its rows and storage. Removing a member does not rotate the key.
 | DB_SYNC_ADMIN_TOKEN | Admin-only token for operator graph deletion endpoints |
 | DB_SYNC_TRUST_PROXY | `true` to take the client address from `X-Forwarded-For` |
 | DB_SYNC_TOKEN_ISSUER | Required. The `iss` claim, an http(s) URL of this server |
-| DB_SYNC_TOKEN_AUDIENCE | The `aud` claim and OAuth client id (default `logseq-sync`) |
+| DB_SYNC_TOKEN_AUDIENCE | The `aud` claim (default `logseq-sync`) |
 | DB_SYNC_TOKEN_TTL_S | Token lifetime in seconds (default 2592000) |
 | DB_SYNC_TOKEN_SIGNER | Required. `file` or `transit` |
 | DB_SYNC_TOKEN_SIGNING_KEY_FILE | PEM private key for the file signer |
@@ -133,11 +150,12 @@ its rows and storage. Removing a member does not rotate the key.
 | BAO_KV_PREFIX | Path prefix of the graph keys in that mount (default `graphs`) |
 | BAO_TOKEN | Static OpenBao token (development only) |
 | BAO_ROLE_ID, BAO_SECRET_ID, BAO_SECRET_ID_FILE | AppRole credentials |
-| DB_SYNC_SIWE_DOMAINS | Required. Comma-separated authorities (host[:port]) sign-in messages may name |
-| DB_SYNC_SIWE_CHAIN_IDS | Comma-separated EIP-155 chain ids to accept (default: any) |
-| DB_SYNC_SIWE_REDIRECT_URIS | Allowed callbacks for the code flow (default: the desktop deep link and the CLI loopback) |
-| DB_SYNC_SIWE_STATEMENT | Statement shown in the sign-in message |
-| DB_SYNC_APP_NAME | Name shown on the hosted sign-in page |
+| DB_SYNC_SIWE_DOMAINS | Required. Comma-separated authorities (host[:port]) sign-in messages may name; must include the issuer's host |
+| DB_SYNC_SIWE_CHAIN_IDS | Comma-separated EIP-155 chain ids to accept and to offer clients (default `1`) |
+| DB_SYNC_SIWE_STATEMENT | Statement shown in the sign-in message (default `Sign in to Logseq`) |
+| DB_SYNC_APP_NAME | Name shown in the wallet picker and sign-in prompts (default `Logseq`) |
+| DB_SYNC_RPC_URLS | Per-chain RPC endpoints for clients, `<chain id>=<url>` comma-separated (default: each chain's public endpoint) |
+| DB_SYNC_WALLETCONNECT_PROJECT_ID | WalletConnect Cloud project id; unset hides WalletConnect wallets |
 | DB_SYNC_LOG_LEVEL | Log level (default `info`) |
 
 ## Schema
@@ -149,6 +167,8 @@ migration's numeric prefix is its position. Add a new entry for every schema
 change and keep the DDL portable (no `pragma`, `autoincrement`, `json_each` or
 `insert or replace`). `0003-drop-key-tables` removed the per-user key exchange
 tables of earlier builds; graph keys live in the key store above.
+`0004-drop-auth-codes` removed the authorization-code table of the hosted
+sign-in page, which no longer exists.
 
 ## Tests
 
@@ -168,4 +188,4 @@ pnpm run show-sqlite-checksum -- --db ~/Downloads/test.sqlite
 
 ## Notes
 - Runtime and db-sync engineering guidance is consolidated in `../../docs/agent-guide/implemented/architecture/2026-08-24-logseq-runtime-and-engineering-guide.md`; current protocol and route definitions live under `src/logseq/db_sync/worker/`.
-- The sign-in flow, token format and hosted page are implemented in `worker/auth/`; the ClojureScript adapter maps them to routes in `src/logseq/db_sync/node/auth.cljs`.
+- The sign-in flow, token format and client configuration are implemented in `worker/auth/`; the ClojureScript adapter maps them to routes in `src/logseq/db_sync/node/auth.cljs`.

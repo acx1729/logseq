@@ -44,9 +44,6 @@
       (string/starts-with? path "/admin/graphs/")
       (index-handler/handle-fetch index-self request)
 
-      (string/starts-with? path "/e2ee")
-      (index-handler/handle-fetch index-self request)
-
       (string/starts-with? path "/auth/")
       (if (= method "OPTIONS")
         (common/options-response)

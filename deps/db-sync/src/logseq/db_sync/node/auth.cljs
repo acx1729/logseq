@@ -1,13 +1,13 @@
 (ns logseq.db-sync.node.auth
   "HTTP surface of wallet sign-in on the Node adapter. Message verification,
-  token minting, the PKCE code store and the hosted page live in worker/auth
-  (JavaScript); this namespace builds that service from the configuration and
-  maps its results and refusals to responses."
+  token minting and the client configuration live in worker/auth
+  (JavaScript); this namespace builds that service from the configuration,
+  keeps the users table in step with sign-ins and maps results and refusals
+  to responses."
   (:require ["path" :as node-path]
             [clojure.string :as string]
             [logseq.db-sync.common :as common]
             [logseq.db-sync.index :as index]
-            [logseq.db-sync.platform.core :as platform]
             [promesa.core :as p]))
 
 (def ^:private auth-lib
@@ -44,9 +44,10 @@
                                         :tokenTtlS (:token-ttl-s cfg)
                                         :siweDomains (to-array (:siwe-domains cfg))
                                         :siweChainIds (to-array (:siwe-chain-ids cfg))
-                                        :redirectUris (to-array (:siwe-redirect-uris cfg))
                                         :siweStatement (:siwe-statement cfg)
-                                        :appName (:app-name cfg)}
+                                        :appName (:app-name cfg)
+                                        :rpcUrls (clj->js (:rpc-urls cfg))
+                                        :walletConnectProjectId (:walletconnect-project-id cfg)}
                            :signer signer
                            :store (.createAuthStore auth-lib index-db)}))
 
@@ -62,11 +63,6 @@
   (p/let [text (.text request)]
     (.parseBody auth-lib (.get (.-headers request) "content-type") text)))
 
-(defn- query-params [^js url]
-  (let [params (js-obj)]
-    (.forEach (.-searchParams url) (fn [value k] (aset params k value)))
-    params))
-
 (defn- error-response [^js error]
   (if (= "AuthError" (.-name error))
     (common/json-response #js {:error (.-code error)
@@ -80,29 +76,26 @@
         method (.-method request)
         ip (client-ip request (:trust-proxy? cfg))]
     (cond
+      (and (= path "/auth/config") (= method "GET"))
+      (common/json-response (.clientConfig service))
+
       (and (= path "/auth/nonce") (= method "GET"))
       (common/json-response (.issueNonce service #js {:ip ip}))
 
       (and (= path "/auth/siwe") (= method "POST"))
       (p/let [body (<request-body request)
-              ^js result (.signIn service #js {:ip ip :body body})
-              _ (index/<user-upsert! db (.-user result))]
-        (if (= "code" (.-kind result))
-          (common/json-response #js {:code (.-code result)})
-          (common/json-response (.tokenResponse service result))))
-
-      (and (= path "/auth/token") (= method "POST"))
-      (p/let [body (<request-body request)
-              result (.exchangeCode service #js {:ip ip :body body})]
-        (common/json-response (.tokenResponse service result)))
+              ^js identity (.verifySignIn service #js {:ip ip :body body})
+              username (index/<user-sign-in! db
+                                             (.-address identity)
+                                             (.-username identity)
+                                             (.-defaultUsername identity))
+              issued (.issueToken service #js {:sub (.-address identity)
+                                               :username username})]
+        (common/json-response (.tokenResponse service issued)))
 
       (and (= path "/auth/jwks.json") (= method "GET"))
       (p/let [jwks (.jwks service)]
         (common/json-response jwks))
-
-      (and (= path "/auth/siwe/start") (= method "GET"))
-      (let [^js page (.signInPage service (query-params url))]
-        (platform/response (.-html page) #js {:status 200 :headers (.-headers page)}))
 
       :else
       (common/json-response {:error "not found"} 404))))

@@ -1,15 +1,16 @@
 (ns logseq.db-sync.node-auth-test
-  "End-to-end wallet sign-in against a running Node adapter: the direct flow,
-  the PKCE code flow used by the CLI, and membership removal cutting sockets."
-  (:require ["node:crypto" :as crypto]
-            ["viem/accounts" :as accounts]
+  "End-to-end wallet sign-in against a running Node adapter: tokens, display
+  names, the client configuration, refusals, and membership removal cutting
+  sockets."
+  (:require ["viem/accounts" :as accounts]
             ["viem/siwe" :as viem-siwe]
             ["ws" :as ws]
             [cljs.test :refer [async deftest is]]
+            [clojure.string :as string]
             [logseq.db-sync.test-server :as test-server]
             [promesa.core :as p]))
 
-(def ^:private redirect-uri "http://localhost:8765/auth/callback")
+(def ^:private issuer "http://127.0.0.1")
 
 (defn- new-account []
   (accounts/privateKeyToAccount (accounts/generatePrivateKey)))
@@ -19,20 +20,25 @@
     {:status (.-status response)
      :body body}))
 
-(defn- <signed-message [base-url ^js account]
-  (p/let [nonce-response (js/fetch (str base-url "/auth/nonce"))
-          {:keys [body]} (<json nonce-response)
-          message (viem-siwe/createSiweMessage
-                   #js {:address (.-address account)
-                        :chainId 1
-                        :domain "localhost"
-                        :nonce (aget body "nonce")
-                        :uri "http://localhost/auth/siwe/start"
-                        :version "1"
-                        :statement "Sign in to Logseq"
-                        :issuedAt (js/Date.)})
-          signature (.signMessage account #js {:message message})]
-    {:message message :signature signature}))
+(defn- <signed-message
+  "A fresh nonce signed by `account`; `opts` override the message's chain id,
+  domain and uri, which default to what a desktop or CLI client sends."
+  ([base-url account] (<signed-message base-url account {}))
+  ([base-url ^js account {:keys [chain-id domain uri]
+                          :or {chain-id 1 domain "127.0.0.1" uri issuer}}]
+   (p/let [nonce-response (js/fetch (str base-url "/auth/nonce"))
+           {:keys [body]} (<json nonce-response)
+           message (viem-siwe/createSiweMessage
+                    #js {:address (.-address account)
+                         :chainId chain-id
+                         :domain domain
+                         :nonce (aget body "nonce")
+                         :uri uri
+                         :version "1"
+                         :statement "Sign in to Logseq"
+                         :issuedAt (js/Date.)})
+           signature (.signMessage account #js {:message message})]
+     {:message message :signature signature})))
 
 (defn- <post-siwe [base-url payload]
   (p/let [response (js/fetch (str base-url "/auth/siwe")
@@ -41,12 +47,22 @@
                                   :body (js/JSON.stringify (clj->js payload))})]
     (<json response)))
 
-(defn- <sign-in [base-url account]
-  (p/let [signed (<signed-message base-url account)
-          {:keys [status body]} (<post-siwe base-url signed)]
-    (when-not (= 200 status)
-      (throw (ex-info "sign-in failed" {:status status :body (js/JSON.stringify body)})))
-    (aget body "access_token")))
+(defn- <sign-in
+  "Signs `account` in and resolves to its token; `username` is sent when given."
+  ([base-url account] (<sign-in base-url account nil))
+  ([base-url account username]
+   (p/let [signed (<signed-message base-url account)
+           {:keys [status body]} (<post-siwe base-url (cond-> signed
+                                                       username (assoc :username username)))]
+     (when-not (= 200 status)
+       (throw (ex-info "sign-in failed" {:status status :body (js/JSON.stringify body)})))
+     (aget body "access_token"))))
+
+(defn- token-claims [token]
+  (-> (second (string/split token #"\."))
+      (js/Buffer.from "base64url")
+      (.toString "utf8")
+      js/JSON.parse))
 
 (defn- <fetch-json [base-url path token & [init]]
   (p/let [response (js/fetch (str base-url path)
@@ -55,22 +71,19 @@
                                              init)))]
     (<json response)))
 
-(defn- pkce-challenge [verifier]
-  (-> (.createHash crypto "sha256")
-      (.update verifier "utf8")
-      (.digest "base64url")))
-
 (defn- with-server
-  "Starts an adapter, runs `(f base-url port)` and stops it whatever happens."
-  [prefix f done]
-  (-> (p/let [{:keys [base-url port stop!]} (test-server/start! prefix)]
-        (-> (p/do (f base-url port))
-            (p/catch (fn [error]
-                       (is false (str error))))
-            (p/then (fn [] (stop!)))))
-      (p/catch (fn [error]
-                 (is false (str error))))
-      (p/then (fn [] (done)))))
+  "Starts an adapter with `overrides`, runs `(f base-url port)` and stops it
+  whatever happens."
+  ([prefix f done] (with-server prefix {} f done))
+  ([prefix overrides f done]
+   (-> (p/let [{:keys [base-url port stop!]} (test-server/start! prefix overrides)]
+         (-> (p/do (f base-url port))
+             (p/catch (fn [error]
+                        (is false (str error))))
+             (p/then (fn [] (stop!)))))
+       (p/catch (fn [error]
+                  (is false (str error))))
+       (p/then (fn [] (done))))))
 
 (deftest siwe-sign-in-issues-token-that-authorizes-graph-requests-test
   (async done
@@ -87,8 +100,12 @@
                      replay (<post-siwe base-url signed)]
                (is (= 200 status))
                (is (string? token))
+               (is (= ["access_token" "expires_in" "scope" "token_type"]
+                      (sort (js/Object.keys body))))
                (is (= "Bearer" (aget body "token_type")))
                (is (= (* 30 24 60 60) (aget body "expires_in")))
+               (is (= (.toLowerCase (.-address account)) (aget (token-claims token) "sub")))
+               (is (= 11 (count (aget (token-claims token) "username"))))
                (is (= 200 (:status graphs)))
                (is (= 0 (count (aget (:body graphs) "graphs"))))
                (is (= 401 (:status anonymous)))
@@ -99,74 +116,78 @@
                (is (= "invalid_nonce" (aget (:body replay) "error")))))
            done)))
 
-(deftest siwe-sign-in-refuses-foreign-domains-and-forged-tokens-test
+(deftest siwe-sign-in-refuses-foreign-domains-chains-and-forged-tokens-test
   (async done
          (with-server
            "tmp/db-sync-node-auth-test/refuse/"
            (fn [base-url _port]
              (p/let [account (new-account)
-                     nonce-response (js/fetch (str base-url "/auth/nonce"))
-                     {:keys [body]} (<json nonce-response)
-                     message (viem-siwe/createSiweMessage
-                              #js {:address (.-address account)
-                                   :chainId 1
-                                   :domain "evil.example.test"
-                                   :nonce (aget body "nonce")
-                                   :uri "https://evil.example.test/"
-                                   :version "1"
-                                   :issuedAt (js/Date.)})
-                     signature (.signMessage account #js {:message message})
-                     refused (<post-siwe base-url {:message message :signature signature})
+                     foreign (<signed-message base-url account {:domain "evil.example.test"
+                                                                :uri "https://evil.example.test/"})
+                     refused (<post-siwe base-url foreign)
+                     other-chain (<signed-message base-url account {:chain-id 10})
+                     wrong-chain (<post-siwe base-url other-chain)
+                     form (js/fetch (str base-url "/auth/siwe")
+                                    #js {:method "POST"
+                                         :headers #js {"content-type" "application/x-www-form-urlencoded"}
+                                         :body "message=x&signature=0x00"})
                      forged (<fetch-json base-url "/graphs" "forged.token.value")]
                (is (= 400 (:status refused)))
                (is (= "siwe_domain_not_allowed" (aget (:body refused) "error")))
+               (is (= 400 (:status wrong-chain)))
+               (is (= "siwe_chain_not_allowed" (aget (:body wrong-chain) "error")))
+               (is (= 415 (.-status form)))
                (is (= 401 (:status forged)))))
            done)))
 
-(deftest code-flow-exchanges-pkce-code-for-token-test
+(deftest sign-in-stores-and-keeps-display-names-test
   (async done
          (with-server
-           "tmp/db-sync-node-auth-test/code/"
+           "tmp/db-sync-node-auth-test/names/"
            (fn [base-url _port]
-             (let [verifier "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk"
-                   challenge (pkce-challenge verifier)]
-               (p/let [account (new-account)
-                       page (js/fetch (str base-url "/auth/siwe/start?response_type=code&client_id=logseq-sync&state=abc"
-                                           "&redirect_uri=" (js/encodeURIComponent redirect-uri)
-                                           "&code_challenge=" challenge "&code_challenge_method=S256"))
-                       page-html (.text page)
-                       bad-page (js/fetch (str base-url "/auth/siwe/start?state=abc&redirect_uri="
-                                               (js/encodeURIComponent "https://evil.example.test/cb")
-                                               "&code_challenge=" challenge "&code_challenge_method=S256"))
-                       signed (<signed-message base-url account)
-                       {:keys [status body]} (<post-siwe base-url (assoc signed
-                                                                        :code_challenge challenge
-                                                                        :code_challenge_method "S256"
-                                                                        :redirect_uri redirect-uri))
-                       code (aget body "code")
-                       form (str "grant_type=authorization_code&code=" (js/encodeURIComponent code)
-                                 "&redirect_uri=" (js/encodeURIComponent redirect-uri)
-                                 "&code_verifier=" verifier "&client_id=logseq-sync")
-                       token-response (js/fetch (str base-url "/auth/token")
-                                                #js {:method "POST"
-                                                     :headers #js {"content-type" "application/x-www-form-urlencoded"}
-                                                     :body form})
-                       token-body (<json token-response)
-                       graphs (<fetch-json base-url "/graphs" (aget (:body token-body) "access_token"))
-                       reuse (js/fetch (str base-url "/auth/token")
-                                       #js {:method "POST"
-                                            :headers #js {"content-type" "application/x-www-form-urlencoded"}
-                                            :body form})]
-                 (is (= 200 (.-status page)))
-                 (is (re-find #"script-src 'sha256-" (.get (.-headers page) "content-security-policy")))
-                 (is (re-find #"siwe-params" page-html))
-                 (is (= 400 (.-status bad-page)))
-                 (is (= 200 status))
-                 (is (string? code))
-                 (is (= 200 (:status token-body)))
-                 (is (string? (aget (:body token-body) "id_token")))
-                 (is (= 200 (:status graphs)))
-                 (is (= 400 (.-status reuse))))))
+             (p/let [account (new-account)
+                     named (<sign-in base-url account "Ada Lovelace")
+                     unnamed (<sign-in base-url account)
+                     renamed (<sign-in base-url account "Ada")
+                     signed (<signed-message base-url account)
+                     blank (<post-siwe base-url (assoc signed :username "  "))
+                     created (<fetch-json base-url "/graphs" renamed
+                                          {:method "POST"
+                                           :body (js/JSON.stringify #js {"graph-name" "notes"
+                                                                         "schema-version" "65"})})
+                     graph-id (aget (:body created) "graph-id")
+                     members (<fetch-json base-url (str "/graphs/" graph-id "/members") renamed)]
+               (is (= "Ada Lovelace" (aget (token-claims named) "username")))
+               (is (= "Ada Lovelace" (aget (token-claims unnamed) "username")))
+               (is (= "Ada" (aget (token-claims renamed) "username")))
+               (is (= 400 (:status blank)))
+               (is (= "invalid_username" (aget (:body blank) "error")))
+               (is (= 200 (:status members)))
+               (is (= ["Ada"] (mapv #(aget % "username") (aget (:body members) "members"))))))
+           done)))
+
+(deftest auth-config-publishes-client-settings-test
+  (async done
+         (with-server
+           "tmp/db-sync-node-auth-test/config/"
+           {:siwe-chain-ids [1 10]
+            :rpc-urls {1 "https://rpc.example.test"}
+            :walletconnect-project-id "wc-project"
+            :app-name "Hobby Notes"}
+           (fn [base-url _port]
+             (p/let [config (<fetch-json base-url "/auth/config" nil)
+                     account (new-account)
+                     on-optimism (<signed-message base-url account {:chain-id 10})
+                     signed-in (<post-siwe base-url on-optimism)]
+               (is (= 200 (:status config)))
+               (is (= {"issuer" issuer
+                       "app_name" "Hobby Notes"
+                       "statement" "Sign in to Logseq"
+                       "chain_ids" [1 10]
+                       "rpc_urls" {"1" "https://rpc.example.test"}
+                       "walletconnect_project_id" "wc-project"}
+                      (js->clj (:body config))))
+               (is (= 200 (:status signed-in)))))
            done)))
 
 (defn- <open-socket [url]

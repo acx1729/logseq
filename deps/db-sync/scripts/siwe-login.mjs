@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 // Signs in to a running sync server with a wallet private key: fetches a
-// nonce, signs an EIP-4361 message, posts it to /auth/siwe and prints (or
-// writes) the token. Used by the CLI e2e launcher and by developers.
+// nonce, signs an EIP-4361 message naming the server, posts it to /auth/siwe
+// and prints (or writes) the token. Used by the CLI e2e launcher and by
+// developers.
 import { mkdirSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname } from "node:path";
@@ -25,6 +26,7 @@ export function parseArgs(argv) {
       case "--private-key": opts.privateKey = next(); break;
       case "--chain-id": opts.chainId = Number(next()); break;
       case "--statement": opts.statement = next(); break;
+      case "--username": opts.username = next(); break;
       case "--write-auth": opts.writeAuth = next(); break;
       default: throw new Error(`unknown argument: ${arg}`);
     }
@@ -47,8 +49,8 @@ async function readJson(response, label) {
   return body;
 }
 
-/** Runs the direct sign-in flow and resolves to `{token, address, expiresIn}`. */
-export async function login({ server, domain, privateKey, chainId = 1, statement = "Sign in to Logseq", fetch = globalThis.fetch }) {
+/** Runs the sign-in flow and resolves to `{token, address, expiresIn}`. */
+export async function login({ server, domain, privateKey, chainId = 1, statement = "Sign in to Logseq", username, fetch = globalThis.fetch }) {
   const base = server.replace(/\/+$/, "");
   const account = privateKeyToAccount(privateKey || generatePrivateKey());
   const siweDomain = domain || new URL(base).host;
@@ -59,7 +61,7 @@ export async function login({ server, domain, privateKey, chainId = 1, statement
     chainId,
     domain: siweDomain,
     nonce,
-    uri: `${base}/auth/siwe/start`,
+    uri: base,
     version: "1",
     statement,
     issuedAt,
@@ -70,15 +72,16 @@ export async function login({ server, domain, privateKey, chainId = 1, statement
     await fetch(`${base}/auth/siwe`, {
       method: "POST",
       headers: { "content-type": "application/json", accept: "application/json" },
-      body: JSON.stringify({ message, signature }),
+      body: JSON.stringify(username === undefined ? { message, signature } : { message, signature, username }),
     }),
     "POST /auth/siwe",
   );
   return { token: body.access_token, address: account.address.toLowerCase(), expiresIn: body.expires_in };
 }
 
+/** The CLI's auth file: the token alone, as `logseq login` writes it. */
 export function authFileJson(token) {
-  return `${JSON.stringify({ provider: "siwe", "id-token": token, "access-token": token })}\n`;
+  return `${JSON.stringify({ "access-token": token })}\n`;
 }
 
 if (process.argv[1] && import.meta.url === new URL(`file://${process.argv[1]}`).href) {
