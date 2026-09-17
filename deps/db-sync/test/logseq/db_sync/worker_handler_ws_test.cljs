@@ -1,15 +1,12 @@
 (ns logseq.db-sync.worker-handler-ws-test
-  (:require [cljs-bean.core :as bean]
-            [cljs.test :refer [async deftest is]]
+  (:require [cljs.test :refer [deftest is]]
             [datascript.core :as d]
             [logseq.db-sync.protocol :as protocol]
             [logseq.db-sync.storage :as storage]
             [logseq.db-sync.test-sql :as test-sql]
-            [logseq.db-sync.worker.handler.sync :as sync-handler]
             [logseq.db-sync.worker.handler.ws :as ws-handler]
             [logseq.db-sync.worker.presence :as presence]
-            [logseq.db-sync.worker.ws :as ws]
-            [promesa.core :as p]))
+            [logseq.db-sync.worker.ws :as ws]))
 
 (deftest presence-message-broadcast-excludes-source-client-test
   (let [source-ws #js {:readyState 1}
@@ -120,71 +117,3 @@
       (is (= "tx/reject" (:type message)))
       (is (= [(str success-tx-id)] (:success-tx-ids message)))
       (is (= (str failed-tx-id) (:failed-tx-id message))))))
-
-(deftest online-users-broadcast-restored-attachment-user-test
-  (let [attachment* (atom nil)
-        ws #js {:readyState 1
-                :serializeAttachment (fn [attachment]
-                                       (reset! attachment* attachment))
-                :deserializeAttachment (fn []
-                                         @attachment*)}
-        self #js {}
-        restored-self #js {}
-        user {:user-id "user-1"
-              :email "user@example.com"
-              :username "alice"}
-        sent (atom nil)]
-    (presence/add-presence! self ws user)
-    (is (= {:presence/user user}
-           (bean/->clj (.deserializeAttachment ws))))
-    (swap! (presence/presence* restored-self)
-           assoc
-           ws
-           (presence/attachment->user (.deserializeAttachment ws)))
-    (with-redefs [ws/broadcast! (fn [_self _sender message]
-                                  (reset! sent message))]
-      (presence/broadcast-online-users! restored-self))
-    (is (= {:type "online-users"
-            :online-users [user]}
-           @sent))))
-
-(deftest websocket-connection-is-rejected-while-snapshot-upload-is-in-progress-test
-  (async done
-         (let [accepted (atom [])
-               presence-events (atom [])
-               self #js {:state #js {:acceptWebSocket (fn [socket]
-                                                        (swap! accepted conj socket))}}
-               request (js/Request. "http://localhost/sync/graph-1/ws?graph-id=graph-1"
-                                    #js {:method "GET"})]
-           (-> (p/with-redefs [sync-handler/<ready-for-sync? (fn [_ _] (p/resolved false))
-                               presence/add-presence! (fn [& _]
-                                                        (swap! presence-events conj :add))
-                               presence/broadcast-online-users! (fn [& _]
-                                                                  (swap! presence-events conj :broadcast))]
-                 (ws-handler/handle-ws self request))
-               (p/then (fn [response]
-                         (is (= 409 (.-status response)))
-                         (is (empty? @accepted))
-                         (is (empty? @presence-events))
-                         (done)))
-               (p/catch (fn [error]
-                          (is false (str error))
-                          (done)))))))
-
-(deftest websocket-connection-uses-graph-id-from-sync-path-test
-  (async done
-         (let [seen-graph-id (atom ::unset)
-               self #js {}
-               request (js/Request. "http://localhost/sync/graph-from-path"
-                                    #js {:method "GET"})]
-           (-> (p/with-redefs [sync-handler/<ready-for-sync? (fn [_self graph-id]
-                                                               (reset! seen-graph-id graph-id)
-                                                               (p/resolved false))]
-                 (ws-handler/handle-ws self request))
-               (p/then (fn [response]
-                         (is (= "graph-from-path" @seen-graph-id))
-                         (is (= 409 (.-status response)))
-                         (done)))
-               (p/catch (fn [error]
-                          (is false (str error))
-                          (done)))))))

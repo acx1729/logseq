@@ -26,13 +26,15 @@
       (let [config (slurp (str config-path))]
         (is (string/includes? config ":http-base \"http://127.0.0.1:18080\""))
         (is (string/includes? config ":ws-url \"ws://127.0.0.1:18080/sync/%s\""))
-        (is (string/includes? config ":oauth-token-endpoint "))
-        (is (string/includes? config "https://logseq-prod.auth.us-east-1.amazoncognito.com/oauth2/token")))
+        (is (string/includes? config ":oauth-token-endpoint \"http://127.0.0.1:18080/auth/token\""))
+        (is (string/includes? config ":oauth-authorize-endpoint \"http://127.0.0.1:18080/auth/siwe/start\""))
+        (is (string/includes? config ":oauth-client-id \"logseq-sync\"")))
       (finally
         (fs/delete-tree tmp-dir)))))
 
 (deftest prepare-case-injects-case-local-sync-resources
-  (let [suite-context {:sync-port "18080"
+  (let [suite-context {:suite-auth-path "/tmp/sync-suite/auth.json"
+                       :sync-port "18080"
                        :sync-http-base "http://127.0.0.1:18080"
                        :sync-ws-url "ws://127.0.0.1:18080/sync/%s"}
         input-case {:id "sync-case"
@@ -50,7 +52,7 @@
     (is (= "sync-case" (:id prepared)))
     (is (= ["mkdir -p '{{tmp-dir}}/graphs-b'"
             "mkdir -p '{{tmp-dir}}/home/logseq'"
-            "cp ~/logseq/auth.json '{{tmp-dir}}/home/logseq/auth.json'"
+            "cp '{{suite-auth-path}}' '{{tmp-dir}}/home/logseq/auth.json'"
             "python3 '{{repo-root}}/cli-e2e/scripts/prepare_sync_config.py' --output '{{config-path}}' --auth-path '{{tmp-dir}}/home/logseq/auth.json' --http-base '{{sync-http-base}}' --ws-url '{{sync-ws-url}}'"
             "python3 '{{repo-root}}/cli-e2e/scripts/prepare_sync_config.py' --output '{{tmp-dir}}/cli-b.edn' --auth-path '{{tmp-dir}}/home/logseq/auth.json' --http-base '{{sync-http-base}}' --ws-url '{{sync-ws-url}}'"
             "{{cli-home}} --root-dir {{root-dir-arg}} --config {{config-path-arg}} --output json graph create --graph {{graph-arg}} >/dev/null"]
@@ -62,15 +64,16 @@
     (is (= "18080" (get-in prepared [:vars :sync-port])))
     (is (= "11111" (get-in prepared [:vars :e2ee-password])))
     (is (= "11111" (get-in prepared [:vars :e2ee-password-arg])))
-    (is (not (contains? (:vars prepared) :suite-auth-path)))
+    (is (= "/tmp/sync-suite/auth.json" (get-in prepared [:vars :suite-auth-path])))
     (is (not (contains? (:vars prepared) :suite-config-path)))
-    (is (not-any? #(string/includes? % "suite-auth-path") (:setup prepared)))
+    (is (some #(string/includes? % "{{suite-auth-path}}") (:setup prepared)))
     (is (not-any? #(string/includes? % "suite-config-path") (:setup prepared)))
     (is (not-any? #(string/includes? % "db_sync_server.py' start") (:setup prepared)))
     (is (not-any? #(string/includes? % "db_sync_server.py' stop") (:cleanup prepared)))))
 
 (deftest prepare-case-places-case-local-auth-before-cli-sync-commands
   (let [suite-context {:suite-tmp-dir "/tmp/sync-suite"
+                       :suite-auth-path "/tmp/sync-suite/auth.json"
                        :sync-port "18080"
                        :sync-http-base "http://127.0.0.1:18080"
                        :sync-ws-url "ws://127.0.0.1:18080/sync/%s"}
@@ -85,7 +88,7 @@
         bootstrap-cmd (nth setup 5)]
     (is (= "mkdir -p '{{tmp-dir}}/graphs-b'" (first setup)))
     (is (= "mkdir -p '{{tmp-dir}}/home/logseq'" (second setup)))
-    (is (= "cp ~/logseq/auth.json '{{tmp-dir}}/home/logseq/auth.json'" (nth setup 2)))
+    (is (= "cp '{{suite-auth-path}}' '{{tmp-dir}}/home/logseq/auth.json'" (nth setup 2)))
     (is (= "python3 '{{repo-root}}/cli-e2e/scripts/prepare_sync_config.py' --output '{{config-path}}' --auth-path '{{tmp-dir}}/home/logseq/auth.json' --http-base '{{sync-http-base}}' --ws-url '{{sync-ws-url}}'"
            (nth setup 3)))
     (is (= "python3 '{{repo-root}}/cli-e2e/scripts/prepare_sync_config.py' --output '{{tmp-dir}}/cli-b.edn' --auth-path '{{tmp-dir}}/home/logseq/auth.json' --http-base '{{sync-http-base}}' --ws-url '{{sync-ws-url}}'"
@@ -132,7 +135,9 @@
       (is (string/includes? (:cmd (first @calls)) "--port 18080"))
       (is (string/includes? (:cmd (first @calls)) "--startup-timeout-s 60"))
       (is (not (string/includes? (:cmd (first @calls)) "prepare_sync_config.py")))
-      (is (not (contains? suite-context :suite-auth-path)))
+      (is (string/includes? (:cmd (first @calls)) "--mint-auth"))
+      (is (string/ends-with? (:suite-auth-path suite-context) "auth.json"))
+      (is (string/includes? (:cmd (first @calls)) (:suite-auth-path suite-context)))
       (is (not (contains? suite-context :suite-config-path))))
     (sync-fixture/after-suite! suite-context {:run-command run-command})
     (testing "after-suite only stops the shared server once"

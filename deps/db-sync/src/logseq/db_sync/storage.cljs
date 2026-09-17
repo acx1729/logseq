@@ -77,19 +77,18 @@
 (def ^:dynamic *in-sql-transaction?* false)
 
 (defn with-sql-transaction!
+  "Runs `f` inside one transaction of the graph store. `sql` must expose a
+  `transaction` function; each storage driver implements it and test doubles
+  pass `f` straight through."
   [sql f]
   (if *in-sql-transaction?*
     (f)
-    (let [f' (fn []
-               (binding [*in-sql-transaction?* true]
-                 (f)))]
-      (if-let [db (aget sql "_db")]
-        (let [transaction (.-transaction db)]
-          (if (fn? transaction)
-            (let [tx-fn (.call transaction db f')]
-              (tx-fn))
-            (f')))
-        (f')))))
+    (let [transaction (aget sql "transaction")]
+      (when-not (fn? transaction)
+        (throw (ex-info "sql object has no transaction function" {})))
+      (transaction (fn []
+                     (binding [*in-sql-transaction?* true]
+                       (f)))))))
 
 (defn set-initial-checksum! [sql checksum]
   (with-sql-transaction!

@@ -19,7 +19,8 @@
 (defn make-sql []
   (let [state (atom {:tx-log {}
                      :meta {}})]
-    #js {:exec (fn [sql & args]
+    #js {:transaction (fn [f] (f))
+         :exec (fn [sql & args]
                  (cond
                    (string/includes? sql "insert into tx_log")
                    (let [[t tx created-at outliner-op] args]

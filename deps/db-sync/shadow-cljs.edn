@@ -3,18 +3,7 @@
  :http {:port 9632}
  :nrepl {:port 8703}
  :builds
- {:db-sync {:target :esm
-            :output-dir "worker/dist/worker"
-            :compiler-options {:source-map true
-                               :warnings {:fn-deprecated false
-                                          :redef false}}
-            :modules {:main {:exports {default logseq.db-sync.worker/worker
-                                       SyncDO logseq.db-sync.worker/SyncDO}}}
-            :js-options {:js-provider :import}
-            :closure-defines {shadow.cljs.devtools.client.env/enabled false
-                              goog.debug.LOGGING_ENABLED true}
-            :devtools {:enabled false}}
-  :db-sync-node {:target :node-script
+ {:db-sync-node {:target :node-script
                  :output-to "worker/dist/node-adapter.js"
                  :main logseq.db-sync.node.entry/main
                  :compiler-options {:source-map true

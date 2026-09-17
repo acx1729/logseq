@@ -1,11 +1,8 @@
 (ns logseq.db-sync.worker.handler.ws
   (:require [logseq.db-sync.protocol :as protocol]
-            [logseq.db-sync.worker.auth :as auth]
             [logseq.db-sync.worker.handler.sync :as sync-handler]
-            [logseq.db-sync.worker.http :as http]
             [logseq.db-sync.worker.presence :as presence]
-            [logseq.db-sync.worker.ws :as ws]
-            [promesa.core :as p]))
+            [logseq.db-sync.worker.ws :as ws]))
 
 (defn handle-ws-message! [^js self ^js ws raw]
   (let [message (-> raw protocol/parse-message ws/coerce-ws-client-message)]
@@ -36,9 +33,6 @@
             (ws/send! ws {:type "error" :message "invalid since"})
             (ws/send! ws (sync-handler/pull-response self since))))
 
-        ;; "snapshot"
-        ;; (send! ws (snapshot-response self))
-
         "tx/batch"
         (let [txs (:txs message)
               user (presence/get-user self ws)
@@ -57,22 +51,3 @@
             (ws/send! ws {:type "tx/reject" :reason "invalid tx"})))
 
         (ws/send! ws {:type "error" :message "unknown type"})))))
-
-(defn handle-ws [^js self request]
-  (let [graph-id (sync-handler/graph-id-from-request request)]
-    (p/let [ready-for-sync? (sync-handler/<ready-for-sync? self graph-id)]
-      (if-not ready-for-sync?
-        (http/error-response "graph not ready" 409)
-        (let [pair (js/WebSocketPair.)
-              client (aget pair 0)
-              server (aget pair 1)
-              state (.-state self)]
-          (aset self "graph-id" graph-id)
-          (.acceptWebSocket state server)
-          (let [token (auth/token-from-request request)
-                claims (auth/unsafe-jwt-claims token)
-                user (presence/claims->user claims)]
-            (when user
-              (presence/add-presence! self server user))
-            (presence/broadcast-online-users! self)
-            (js/Response. nil #js {:status 101 :webSocket client})))))))

@@ -45,7 +45,7 @@
 - **i18n (mandatory)**: Always load `.agents/skills/logseq-i18n/SKILL.md` before any change that adds, edits, or removes user-facing UI text, regardless of whether other skills also apply.
 - Review notes live in `prompts/review.md`; check them when preparing changes.
 - Runtime, sync, CLI, rendering, search, and Graph View engineering guidance is consolidated in `docs/agent-guide/implemented/architecture/2026-08-24-logseq-runtime-and-engineering-guide.md`; current source and tests remain authoritative.
-- For db-sync D1 schema changes, add or update a Cloudflare worker SQL migration under `deps/db-sync/worker/migrations/`; do not rely on ad hoc runtime-only schema migration code.
+- For db-sync index database schema changes, add a new entry to `logseq.db-sync.index/index-migrations` (auth tables live in `deps/db-sync/worker/auth/store.js` as `AUTH_MIGRATIONS`); never edit an applied migration and never probe the schema at runtime. Keep the DDL portable across SQLite and Postgres: no `pragma`, `autoincrement`, `json_each` or `insert or replace`; `on conflict ... do update` is fine.
 - New properties should be added to `logseq.db.frontend.property/built-in-properties`.
 - Avoid creating new class or property unless you have to.
 - Avoid shadow var, e.g. `bytes` should be named as `payload`.

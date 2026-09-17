@@ -79,8 +79,8 @@
                  (if (select-sql? sql)
                    (.all (.prepare db sql))
                    (.exec db sql))))
-       :close (fn [] (.close db))
-       :_db db})
+       :transaction (fn [f] ((.transaction db f)))
+       :close (fn [] (.close db))})
 
 (defn- short-preview
   [tx-data]

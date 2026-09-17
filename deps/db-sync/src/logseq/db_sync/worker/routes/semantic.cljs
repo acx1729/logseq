@@ -390,8 +390,8 @@
     :securitySchemes
     {:oauth {:type "oauth2"
              :flows {:authorizationCode
-                     {:authorizationUrl (str issuer "/oauth2/authorize")
-                      :tokenUrl (str issuer "/oauth2/token")
+                     {:authorizationUrl (str issuer "/auth/siwe/start")
+                      :tokenUrl (str issuer "/auth/token")
                       :scopes {:logseq/read "Read pages and blocks"
                                :logseq/write "Create and edit pages and blocks"}}}}}}
    :paths

@@ -35,8 +35,8 @@
                    (.all (.prepare db sql))
                    (.exec db sql))))
        :prepare (fn [sql] (.prepare db sql))
-       :close (fn [] (.close db))
-       :_db db})
+       :transaction (fn [f] ((.transaction db f)))
+       :close (fn [] (.close db))})
 
 (defn open-index-db [data-dir]
   (let [db-path (node-path/join data-dir "index.sqlite")]

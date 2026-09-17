@@ -108,70 +108,23 @@ jobs:
       - name: Prepare stress auth
         run: |
           mkdir -p tmp/cli-sync-stress/home/logseq
-          node <<'NODE'
-          const crypto = require("node:crypto");
-          const fs = require("node:fs");
-
-          const encode = (payload) => Buffer.from(JSON.stringify(payload)).toString("base64url");
-          const { publicKey, privateKey } = crypto.generateKeyPairSync("rsa", { modulusLength: 2048 });
-          const publicJwk = publicKey.export({ format: "jwk" });
-          const exp = Math.floor(Date.now() / 1000) + 3600;
-          const header = encode({ alg: "RS256", kid: "cli-sync-stress", typ: "JWT" });
-          const payload = encode({
-              sub: "cli-sync-stress-user",
-              email: "cli-sync-stress@example.com",
-              iss: "http://127.0.0.1:19091",
-              aud: "logseq-cli-sync-stress",
-              client_id: "logseq-cli-sync-stress",
-              exp,
-          });
-          const signature = crypto.createSign("RSA-SHA256")
-            .update(`${header}.${payload}`)
-            .sign(privateKey)
-            .toString("base64url");
-          const token = `${header}.${payload}.${signature}`;
-
-          fs.writeFileSync(
-            "tmp/cli-sync-stress/jwks.json",
-            `${JSON.stringify({
-              keys: [{ ...publicJwk, alg: "RS256", use: "sig", kid: "cli-sync-stress" }],
-            })}\n`,
-          );
-
-          fs.writeFileSync(
-            "tmp/cli-sync-stress/home/logseq/auth.json",
-            `${JSON.stringify({
-              "refresh-token": "cli-sync-stress-refresh-token",
-              "id-token": token,
-              "access-token": token,
-            })}\n`,
-          );
-          NODE
+          node deps/db-sync/scripts/generate-signing-key.mjs tmp/cli-sync-stress/signing-key.pem
+          node deps/db-sync/scripts/mint-token.mjs \
+            --key-file tmp/cli-sync-stress/signing-key.pem \
+            --issuer http://127.0.0.1:18080 \
+            --audience logseq-sync \
+            --address 0x000000000000000000000000000000000000dEaD \
+            --write-auth tmp/cli-sync-stress/home/logseq/auth.json
 
       - name: Run CLI sync stress
         env:
           LOGSEQ_BIN: ${{ github.workspace }}/tmp/cli-sync-stress/logseq
           LOGSEQ_CLI_ROOT_DIR: ${{ github.workspace }}/tmp/cli-sync-stress/root
           HOME: ${{ github.workspace }}/tmp/cli-sync-stress/home
+          # The local sync server verifies the token minted above with this key.
+          DB_SYNC_TOKEN_SIGNING_KEY_FILE: ${{ github.workspace }}/tmp/cli-sync-stress/signing-key.pem
         run: |
           mkdir -p tmp/cli-sync-stress
-          node <<'NODE' &
-          const fs = require("node:fs");
-          const http = require("node:http");
-          const jwks = fs.readFileSync("tmp/cli-sync-stress/jwks.json");
-
-          http.createServer((req, res) => {
-            if (req.url === "/.well-known/jwks.json") {
-              res.writeHead(200, { "content-type": "application/json" });
-              res.end(jwks);
-              return;
-            }
-            res.writeHead(404, { "content-type": "application/json" });
-            res.end(JSON.stringify({ error: "not found" }));
-          }).listen(19091, "127.0.0.1");
-          NODE
-          JWKS_PID=$!
-          trap 'kill "$JWKS_PID" 2>/dev/null || true' EXIT
 
           printf '#!/usr/bin/env sh\nexec node "%s/static/logseq-cli.js" "$@"\n' "$GITHUB_WORKSPACE" > "$LOGSEQ_BIN"
           chmod +x "$LOGSEQ_BIN"

@@ -26,7 +26,8 @@
 (defn- with-memory-sql
   [f]
   (let [db (new sqlite ":memory:" nil)
-        sql #js {:exec (fn [sql-str & args]
+        sql #js {:transaction (fn [f] ((.transaction db f)))
+                 :exec (fn [sql-str & args]
                          (let [stmt (.prepare db sql-str)]
                            (if (select-sql? sql-str)
                              (all-sql stmt args)

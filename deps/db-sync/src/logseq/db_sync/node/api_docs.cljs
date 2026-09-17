@@ -3,7 +3,7 @@
             [logseq.db-sync.worker.routes.semantic :as semantic-routes]))
 
 (defn ^:export main []
-  (let [issuer (or (aget js/process.env "COGNITO_ISSUER") "")
+  (let [issuer (or (aget js/process.env "DB_SYNC_TOKEN_ISSUER") "")
         document (semantic-routes/openapi-document issuer)]
     (.mkdirSync fs "worker/dist" #js {:recursive true})
     (.writeFileSync fs "worker/dist/openapi.json"

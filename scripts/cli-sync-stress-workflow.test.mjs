@@ -12,12 +12,12 @@ test("CLI sync stress workflow runs local sync/offline stress and validates the 
   assert.match(workflow, /pnpm --dir deps\/db-sync build:node-adapter/);
   assert.match(workflow, /opam exec -- pnpm cli:release/);
   assert.match(workflow, /pnpm db-worker-node:release:bundle/);
-  assert.match(workflow, /alg: "RS256"/);
-  assert.match(workflow, /kid: "cli-sync-stress"/);
-  assert.match(workflow, /generateKeyPairSync/);
-  assert.match(workflow, /createSign/);
-  assert.match(workflow, /http:\/\/127\.0\.0\.1:19091/);
-  assert.match(workflow, /http\.createServer/);
+  assert.match(workflow, /node deps\/db-sync\/scripts\/generate-signing-key\.mjs tmp\/cli-sync-stress\/signing-key\.pem/);
+  assert.match(workflow, /node deps\/db-sync\/scripts\/mint-token\.mjs/);
+  assert.match(workflow, /--issuer http:\/\/127\.0\.0\.1:18080/);
+  assert.match(workflow, /--write-auth tmp\/cli-sync-stress\/home\/logseq\/auth\.json/);
+  assert.match(workflow, /DB_SYNC_TOKEN_SIGNING_KEY_FILE: \$\{\{ github\.workspace \}\}\/tmp\/cli-sync-stress\/signing-key\.pem/);
+  assert.doesNotMatch(workflow, /COGNITO|jwks\.json|http\.createServer/);
   assert.match(workflow, /LOGSEQ_CLI_ROOT_DIR/);
   assert.match(workflow, /HOME: \$\{\{ github\.workspace \}\}\/tmp\/cli-sync-stress\/home/);
   assert.match(workflow, /node scripts\/cli-concurrent-edit-stress\.mjs/);

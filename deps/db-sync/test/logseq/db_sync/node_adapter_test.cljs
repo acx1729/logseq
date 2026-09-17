@@ -2,8 +2,8 @@
   ;; Linters disabled because commented out FIXME code causes false positives
   {:clj-kondo/config {:ignore true}}
   (:require [clojure.string :as string]
-            [logseq.db-sync.node.server :as node-server]
             [logseq.db-sync.protocol :as protocol]
+            [logseq.db-sync.test-server :as test-server]
             [promesa.core :as p]))
 
 (def test-token "test-token")
@@ -24,10 +24,7 @@
   (.json resp))
 
 (defn- start-test-server []
-  (let [suffix (str (random-uuid))
-        dir (str "tmp/db-sync-node-test/" suffix)]
-    (node-server/start! {:port 0
-                         :data-dir dir})))
+  (test-server/start! "tmp/db-sync-node-test/"))
 ;; FIXME: Tests are disabled until they stop hanging
 #_(deftest node-adapter-http-roundtrip-test
     (async done
