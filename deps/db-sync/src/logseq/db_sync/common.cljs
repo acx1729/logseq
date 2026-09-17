@@ -1,6 +1,5 @@
 (ns logseq.db-sync.common
-  (:require [clojure.string :as string]
-            [logseq.db-sync.platform.core :as platform]
+  (:require [logseq.db-sync.platform.core :as platform]
             [logseq.db.sqlite.util :as sqlite-util]
             [promesa.core :as p]))
 
@@ -86,7 +85,3 @@
 
 (defn now-ms []
   (.now js/Date))
-
-(defn upgrade-request? [request]
-  (= "websocket"
-     (string/lower-case (or (.get (.-headers request) "upgrade") ""))))

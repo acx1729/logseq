@@ -5,10 +5,6 @@
             [logseq.db-sync.index :as index]
             [promesa.core :as p]))
 
-(def ^:private graph-e2ee-migration-sql
-  "alter table graphs add column graph_e2ee integer default 1")
-(def ^:private graph-ready-for-use-migration-sql
-  "alter table graphs add column graph_ready_for_use integer default 1")
 (def ^:private graph-members-graph-id-created-at-index-sql
   "create index if not exists idx_graph_members_graph_id_created_at on graph_members (graph_id, created_at)")
 (def ^:private graphs-user-id-updated-at-index-sql
@@ -113,65 +109,63 @@
                           (is false (str error))
                           (done)))))))
 
-(deftest index-init-runs-graph-e2ee-migration-test
-  (async done
-         (let [sql-calls (atom [])]
-           (-> (p/with-redefs [common/<d1-all (fn [& _]
-                                                (p/resolved #js {:results #js []}))
-                               common/get-sql-rows (fn [result]
-                                                     (aget result "results"))
-                               common/<d1-run (fn [_db sql & _args]
-                                                (swap! sql-calls conj (string/lower-case sql))
-                                                (p/resolved {:ok true}))]
-                 (index/<index-init! :db))
-               (p/then (fn [_]
-                         (is (some #(string/includes? % graph-e2ee-migration-sql)
-                                   @sql-calls))
-                         (done)))
-               (p/catch (fn [error]
-                          (is false (str error))
-                          (done)))))))
+(defn- run-index-init!
+  "Runs <index-init! against fakes; `applied` lists the migration ids the
+  fake schema_migrations table already holds. Returns the recorded statements."
+  [applied extra-migrations]
+  (let [sql-calls (atom [])]
+    (-> (p/with-redefs [common/<d1-all (fn [_db sql & _args]
+                                         (p/resolved
+                                          (if (string/includes? sql "schema_migrations")
+                                            #js {:results (into-array (map (fn [id] #js {"id" id}) applied))}
+                                            #js {:results #js []})))
+                        common/get-sql-rows (fn [result]
+                                              (aget result "results"))
+                        common/<d1-run (fn [_db sql & args]
+                                         (swap! sql-calls conj {:sql (string/lower-case sql)
+                                                                :args args})
+                                         (p/resolved {:ok true}))]
+          (index/<index-init! :db extra-migrations))
+        (p/then (fn [_] @sql-calls)))))
 
-(deftest index-init-runs-graph-ready-for-use-migration-test
-  (async done
-         (let [sql-calls (atom [])]
-           (-> (p/with-redefs [common/<d1-all (fn [& _]
-                                                (p/resolved #js {:results #js []}))
-                               common/get-sql-rows (fn [result]
-                                                     (aget result "results"))
-                               common/<d1-run (fn [_db sql & _args]
-                                                (swap! sql-calls conj (string/lower-case sql))
-                                                (p/resolved {:ok true}))]
-                 (index/<index-init! :db))
-               (p/then (fn [_]
-                         (is (some #(string/includes? % graph-ready-for-use-migration-sql)
-                                   @sql-calls))
-                         (done)))
-               (p/catch (fn [error]
-                          (is false (str error))
-                          (done)))))))
+(defn- migration-inserts [sql-calls]
+  (->> sql-calls
+       (filter #(string/includes? (:sql %) "insert into schema_migrations"))
+       (map (comp first :args))))
 
-(deftest index-init-ignores-duplicate-graph-e2ee-column-error-test
+(deftest index-init-applies-base-migration-once-test
   (async done
-         (let [sql-calls (atom [])]
-           (-> (p/with-redefs [common/<d1-all (fn [& _]
-                                                (p/resolved #js {:results #js []}))
-                               common/get-sql-rows (fn [result]
-                                                     (aget result "results"))
-                               common/<d1-run (fn [_db sql & _args]
-                                                (let [sql' (string/lower-case sql)]
-                                                  (swap! sql-calls conj sql')
-                                                  (if (string/includes? sql' graph-e2ee-migration-sql)
-                                                    (p/rejected (ex-info "duplicate column name: graph_e2ee" {}))
-                                                    (p/resolved {:ok true}))))]
-                 (index/<index-init! :db))
-               (p/then (fn [_]
-                         (is (some #(string/includes? % graph-e2ee-migration-sql)
-                                   @sql-calls))
-                         (done)))
-               (p/catch (fn [error]
-                          (is false (str error))
-                          (done)))))))
+         (-> (p/let [first-run (run-index-init! [] [])
+                     second-run (run-index-init! ["0001-index-baseline"] [])]
+               (is (some #(string/includes? (:sql %) "create table if not exists schema_migrations") first-run))
+               (is (some #(string/includes? (:sql %) "create table if not exists graphs") first-run))
+               (is (some #(string/includes? (:sql %) "create table if not exists graph_members") first-run))
+               (is (= ["0001-index-baseline"] (migration-inserts first-run)))
+               (is (not-any? #(string/includes? (:sql %) "create table if not exists graphs") second-run))
+               (is (empty? (migration-inserts second-run))))
+             (p/then (fn [] (done)))
+             (p/catch (fn [error]
+                        (is false (str error))
+                        (done))))))
+
+(deftest index-init-applies-extra-migrations-after-base-test
+  (async done
+         (-> (p/let [extra [{:id "0002-auth-tables"
+                             :statements ["create table if not exists auth_nonces (nonce TEXT primary key)"]}]
+                     sql-calls (run-index-init! [] extra)]
+               (is (some #(string/includes? (:sql %) "create table if not exists auth_nonces") sql-calls))
+               (is (= ["0001-index-baseline" "0002-auth-tables"] (migration-inserts sql-calls))))
+             (p/then (fn [] (done)))
+             (p/catch (fn [error]
+                        (is false (str error))
+                        (done))))))
+
+(deftest index-migrations-use-portable-ddl-test
+  (doseq [{:keys [id statements]} index/index-migrations]
+    (is (re-matches #"\d{4}-[a-z-]+" id))
+    (doseq [statement statements]
+      (is (not (re-find #"(?i)autoincrement|json_each|pragma|insert or replace" statement))
+          (str id ": " statement)))))
 
 (deftest index-init-creates-indexes-test
   (async done

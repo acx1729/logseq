@@ -17,6 +17,9 @@
             (let [value (aget node-headers k)]
               (when (some? value)
                 (.set headers (string/lower-case k) value))))
+        _ (when-let [remote-address (some-> req .-socket .-remoteAddress)]
+            ;; Set after the client's headers so it cannot be spoofed.
+            (.set headers "x-db-sync-remote-address" remote-address))
         method (or (.-method req) "GET")
         host (or host (aget node-headers "host") "localhost")
         scheme (or scheme "http")

@@ -11,7 +11,7 @@
 
 (def ^:private heavy-setup-patterns
   [#"^mkdir -p '\{\{tmp-dir\}\}/home/logseq'$"
-   #"^cp ~/logseq/auth\.json\b"
+   #"^cp .*auth\.json"
    #"prepare_sync_config\.py"
    #"db_sync_server\.py'? start"])
 
@@ -29,7 +29,7 @@
 (defn- case-local-setup-prefix
   []
   ["mkdir -p '{{tmp-dir}}/home/logseq'"
-   "cp ~/logseq/auth.json '{{tmp-dir}}/home/logseq/auth.json'"
+   "cp '{{suite-auth-path}}' '{{tmp-dir}}/home/logseq/auth.json'"
    "python3 '{{repo-root}}/cli-e2e/scripts/prepare_sync_config.py' --output '{{config-path}}' --auth-path '{{tmp-dir}}/home/logseq/auth.json' --http-base '{{sync-http-base}}' --ws-url '{{sync-ws-url}}'"
    "python3 '{{repo-root}}/cli-e2e/scripts/prepare_sync_config.py' --output '{{tmp-dir}}/cli-b.edn' --auth-path '{{tmp-dir}}/home/logseq/auth.json' --http-base '{{sync-http-base}}' --ws-url '{{sync-ws-url}}'"])
 
@@ -74,8 +74,8 @@
         db-sync-root-dir (str (fs/path suite-tmp-dir "db-sync-server-data"))
         sync-http-base (str "http://127.0.0.1:" sync-port)
         sync-ws-url (str "ws://127.0.0.1:" sync-port "/sync/%s")
-        auth-path (str (fs/path (System/getProperty "user.home") "logseq" "auth.json"))
-        start-db-sync-cmd (format "python3 %s start --repo-root %s --pid-file %s --log-file %s --data-dir %s --port %s --startup-timeout-s 60 --auth-path %s"
+        auth-path (str (fs/path suite-tmp-dir "auth.json"))
+        start-db-sync-cmd (format "python3 %s start --repo-root %s --pid-file %s --log-file %s --data-dir %s --port %s --startup-timeout-s 60 --auth-path %s --mint-auth"
                                   (shell-quote (paths/repo-path "cli-e2e" "scripts" "db_sync_server.py"))
                                   (shell-quote (paths/repo-root))
                                   (shell-quote db-sync-pid-file)
@@ -86,6 +86,7 @@
     (run-command {:cmd start-db-sync-cmd
                   :dir (paths/repo-root)})
     {:suite-tmp-dir suite-tmp-dir
+     :suite-auth-path auth-path
      :db-sync-pid-file db-sync-pid-file
      :db-sync-log-file db-sync-log-file
      :db-sync-root-dir db-sync-root-dir
@@ -94,7 +95,7 @@
      :sync-ws-url sync-ws-url}))
 
 (defn prepare-case
-  [case {:keys [suite-tmp-dir sync-port sync-http-base sync-ws-url e2ee-password]}]
+  [case {:keys [suite-tmp-dir suite-auth-path sync-port sync-http-base sync-ws-url e2ee-password]}]
   (let [e2ee-password (or e2ee-password default-e2ee-password)
         user-keys-graph (or (get-in case [:vars :user-keys-graph])
                             default-user-keys-graph)
@@ -116,6 +117,7 @@
                       vec)]
     (-> case
         (update :vars merge {:sync-port sync-port
+                             :suite-auth-path suite-auth-path
                              :sync-http-base sync-http-base
                              :sync-ws-url sync-ws-url
                              :e2ee-password e2ee-password

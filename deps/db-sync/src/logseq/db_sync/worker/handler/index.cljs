@@ -21,34 +21,31 @@
          (seq expected)
          (= expected actual))))
 
-(defn- <delete-graph-do! [^js env ^js url graph-id]
-  (let [^js namespace (.-LOGSEQ_SYNC_DO env)
-        _ (when-not namespace
-            (throw (ex-info "missing LOGSEQ_SYNC_DO binding"
-                            {:graph-id graph-id
-                             :binding "LOGSEQ_SYNC_DO"})))
-        do-id (.idFromName namespace graph-id)
-        stub (.get namespace do-id)
-        reset-url (str (.-origin url) "/admin/reset")]
-    (p/let [resp (.fetch stub (js/Request. reset-url #js {:method "DELETE"}))]
-      (when-not (.-ok resp)
-        (throw (ex-info "graph DO delete failed"
-                        {:graph-id graph-id
-                         :status (.-status resp)})))
-      resp)))
+(declare invalidate-graph-access!)
 
 (defn- <delete-graph-storage!
-  [^js env ^js url graph-id]
+  [^js env graph-id]
   (let [delete-graph-fn (aget env "DB_SYNC_DELETE_GRAPH")]
-    (if (fn? delete-graph-fn)
-      (delete-graph-fn graph-id)
-      (<delete-graph-do! env url graph-id))))
+    (when-not (fn? delete-graph-fn)
+      (throw (ex-info "DB_SYNC_DELETE_GRAPH is not configured" {:graph-id graph-id})))
+    (delete-graph-fn graph-id)))
 
-(defn- <delete-graph! [db ^js env ^js url graph-id]
+(defn- <delete-graph! [db ^js env graph-id]
   (p/do!
    (index/<graph-delete-metadata! db graph-id)
-   (<delete-graph-storage! env url graph-id)
-   (index/<graph-delete-index-entry! db graph-id)))
+   (<delete-graph-storage! env graph-id)
+   (index/<graph-delete-index-entry! db graph-id)
+   (invalidate-graph-access! graph-id)))
+
+(defn- <revoke-member-access!
+  "Makes a membership removal take effect now: forgets cached access decisions
+  for the graph and closes the member's open sockets on it."
+  [^js env graph-id member-id]
+  (let [close-sockets-fn (aget env "DB_SYNC_CLOSE_MEMBER_SOCKETS")]
+    (when-not (fn? close-sockets-fn)
+      (throw (ex-info "DB_SYNC_CLOSE_MEMBER_SOCKETS is not configured" {:graph-id graph-id})))
+    (invalidate-graph-access! graph-id)
+    (close-sockets-fn graph-id member-id)))
 
 (defn- <safe-user-activity-touch!
   [db user-id]
@@ -84,7 +81,7 @@
         (p/resolved nil)))
     (p/resolved nil)))
 
-(defn ^:large-vars/cleanup-todo handle [{:keys [db ^js env request url claims route]}]
+(defn ^:large-vars/cleanup-todo handle [{:keys [db ^js env request ^js url claims route]}]
   (let [path-params (:path-params route)
         graph-id (:graph-id path-params)
         member-id (:member-id path-params)
@@ -236,11 +233,13 @@
                                  (= "member" target-role))]
           (cond
             (and manager? (not= "manager" target-role))
-            (p/let [_ (index/<graph-member-delete! db graph-id member-id)]
+            (p/let [_ (index/<graph-member-delete! db graph-id member-id)
+                    _ (<revoke-member-access! env graph-id member-id)]
               (http/json-response :graph-members/delete {:ok true}))
 
             self-leave?
-            (p/let [_ (index/<graph-member-delete! db graph-id member-id)]
+            (p/let [_ (index/<graph-member-delete! db graph-id member-id)
+                    _ (<revoke-member-access! env graph-id member-id)]
               (http/json-response :graph-members/delete {:ok true}))
 
             :else
@@ -258,12 +257,12 @@
         (p/let [owns? (index/<user-has-access-to-graph? db graph-id user-id)]
           (if (not owns?)
             (http/forbidden)
-            (p/let [_ (<delete-graph! db env url graph-id)]
+            (p/let [_ (<delete-graph! db env graph-id)]
               (http/json-response :graphs/delete {:graph-id graph-id :deleted true})))))
 
       :admin-graphs/delete
       (if (seq graph-id)
-        (p/let [_ (<delete-graph! db env url graph-id)]
+        (p/let [_ (<delete-graph! db env graph-id)]
           (http/json-response :graphs/delete {:graph-id graph-id :deleted true}))
         (http/bad-request "missing graph id"))
 
@@ -465,6 +464,17 @@
              (sort-by (comp :cached-at val))
              (drop drop-count)
              (into {}))))))
+
+(defn invalidate-graph-access!
+  "Drops cached access decisions for `graph-id`, so a membership change is
+  enforced on the next request instead of after the cache TTL."
+  [graph-id]
+  (swap! *graph-access-cache
+         (fn [cache]
+           (into {}
+                 (remove (fn [[[cached-graph-id _] _]]
+                           (= cached-graph-id graph-id)))
+                 cache))))
 
 (defn- cache-graph-access!
   [graph-id token allowed? current-ms]

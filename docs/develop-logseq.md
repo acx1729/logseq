@@ -125,49 +125,37 @@ The final released binaries or installers will be at `static/out/`.
 
 ## DB sync
 
-DB sync can be run locally in one of two ways as described in the following
-sections. To use a local sync approach, the app must be built with
-`$ENABLE_DB_SYNC_LOCAL` e.g. `ENABLE_DB_SYNC_LOCAL=true pnpm watch`. For more
-about db sync, see [its readme](/deps/db-sync/README.md).
-
-### DB sync Cloudflare Worker adapter
-
-Build and run a Cloudlare worker locally
-
-```bash
-cd deps/db-sync
-pnpm install
-pnpm release
-# This migration is a one time setup
-cd worker && wrangler d1 migrations apply DB --local && cd -
-pnpm dev
-```
-
-When testing
+DB sync runs against the self-hosted Node adapter in `deps/db-sync`. To use a
+local sync server, the app must be built with `$ENABLE_DB_SYNC_LOCAL`, e.g.
+`ENABLE_DB_SYNC_LOCAL=true pnpm watch`. For more about db sync, see
+[its readme](/deps/db-sync/README.md).
 
 ### DB sync Node adapter (self-hosted)
 
-Build and run the Node.js adapter for self-hosted DB sync.
+Build and run the adapter with the development signing key (a PEM file the
+server generates on first start) and the web app's dev origin as the allowed
+Sign-In with Ethereum domain:
 
 ```bash
 cd deps/db-sync
 pnpm install
-DB_SYNC_PORT=8787 \
-COGNITO_ISSUER=https://cognito-idp.us-east-2.amazonaws.com/us-east-2_kAqZcxIeM \
-COGNITO_CLIENT_ID=1qi1uijg8b6ra70nejvbptis0q \
-COGNITO_JWKS_URL=https://cognito-idp.us-east-2.amazonaws.com/us-east-2_kAqZcxIeM/.well-known/jwks.json \
 pnpm build:node-adapter
-
-DB_SYNC_PORT=8787 \
-COGNITO_ISSUER=https://cognito-idp.us-east-2.amazonaws.com/us-east-2_kAqZcxIeM \
-COGNITO_CLIENT_ID=1qi1uijg8b6ra70nejvbptis0q \
-COGNITO_JWKS_URL=https://cognito-idp.us-east-2.amazonaws.com/us-east-2_kAqZcxIeM/.well-known/jwks.json \
-pnpm start:node-adapter
+./start.sh
 ```
 
-Optional environment variables:
-- DB_SYNC_DATA_DIR (defaults to data/db-sync)
+`start.sh` listens on `DB_SYNC_PORT` (default 8787), signs tokens with
+`data/db-sync/signing-key.pem` and accepts sign-ins from `localhost:3001`,
+`127.0.0.1:3001` and the server's own host. Override any `DB_SYNC_*` variable
+before running it; the full list is in the readme.
+
+To obtain a token without a browser wallet, sign in with a throwaway key:
+
+```bash
+node scripts/siwe-login.mjs --server http://127.0.0.1:8787 --write-auth ~/logseq/auth.json
+```
 
 Notes:
-- The Cognito values above match `ENABLE_DB_SYNC_LOCAL=true pnpm watch` default auth config.
-- For production builds, use the production Cognito pool values from `src/main/frontend/config.cljs`.
+- Every token is minted by the server after a wallet signature; there is no
+  identity provider to configure.
+- Production deployments sign tokens through OpenBao Transit
+  (`DB_SYNC_TOKEN_SIGNER=transit`) instead of a key file.

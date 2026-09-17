@@ -1,107 +1,68 @@
 (ns logseq.db-sync.worker-auth-test
   (:require [cljs.test :refer [async deftest is]]
-            [logseq.common.authorization :as authorization]
             [logseq.db-sync.worker.auth :as auth]
             [promesa.core :as p]))
 
-(deftest cognito-client-id-allowlist-test
-  (let [env #js {"COGNITO_CLIENT_ID" "web-client"
-                 "COGNITO_CLIENT_IDS" "chatgpt-client, admin-client"}]
-    (is (authorization/client-id-allowed? env "web-client"))
-    (is (authorization/client-id-allowed? env "chatgpt-client"))
-    (is (authorization/client-id-allowed? env "admin-client"))
-    (is (not (authorization/client-id-allowed? env "unknown-client")))))
+(defn- request-with-token [token]
+  (js/Request. "http://localhost/graphs"
+               #js {:headers #js {"authorization" (str "Bearer " token)}}))
 
-(deftest cognito-client-id-allowlist-fails-closed-test
-  (is (not (authorization/client-id-allowed? #js {} nil)))
-  (is (not (authorization/client-id-allowed? #js {} "")))
-  (is (not (authorization/client-id-allowed? #js {"COGNITO_CLIENT_ID" ""} "")))
-  (is (not (authorization/client-id-allowed? #js {"COGNITO_CLIENT_IDS" " , "} "chatgpt-client")))
-  (is (not (authorization/client-id-allowed? #js {"COGNITO_CLIENT_ID" "web-client"} nil))))
+(defn- env-with-verifier [verify]
+  #js {"DB_SYNC_VERIFY_TOKEN" verify})
 
-(deftest auth-claims-uses-jwt-verification-test
+(deftest token-from-request-reads-bearer-header-or-query-param-test
+  (is (= "abc" (auth/token-from-request (request-with-token "abc"))))
+  (is (= "xyz" (auth/token-from-request (js/Request. "http://localhost/sync/graph-1?token=xyz"))))
+  (is (nil? (auth/token-from-request (js/Request. "http://localhost/graphs")))))
+
+(deftest auth-claims-returns-verified-claims-test
   (async done
-         (let [request (js/Request. "http://localhost/graphs"
-                                    #js {:headers #js {"authorization" "Bearer dev-token"}})]
-           (-> (p/with-redefs [authorization/verify-jwt
-                               (fn [token _env]
-                                 (js/Promise.resolve #js {"sub" (str "jwt:" token)}))]
-                 (p/let [claims (auth/auth-claims request #js {})]
-                   (is (= "jwt:dev-token" (aget claims "sub")))))
-               (p/then (fn [] (done)))
-               (p/catch (fn [error]
-                          (is false (str error))
-                          (done)))))))
+         (-> (p/let [claims (auth/auth-claims (request-with-token "good")
+                                              (env-with-verifier
+                                               (fn [token]
+                                                 (js/Promise.resolve #js {"sub" (str "user:" token)}))))]
+               (is (= "user:good" (aget claims "sub"))))
+             (p/then (fn [] (done)))
+             (p/catch (fn [error]
+                        (is false (str error))
+                        (done))))))
 
-(deftest auth-claims-without-token-returns-nil-test
+(deftest auth-claims-returns-nil-without-token-test
   (async done
-         (let [request (js/Request. "http://localhost/graphs")]
-           (-> (p/let [claims (auth/auth-claims request #js {})]
-                 (is (nil? claims)))
-               (p/then (fn [] (done)))
-               (p/catch (fn [error]
-                          (is false (str error))
-                          (done)))))))
+         (-> (p/let [claims (auth/auth-claims (js/Request. "http://localhost/graphs")
+                                              (env-with-verifier
+                                               (fn [_token]
+                                                 (throw (ex-info "verifier must not run" {})))))]
+               (is (nil? claims)))
+             (p/then (fn [] (done)))
+             (p/catch (fn [error]
+                        (is false (str error))
+                        (done))))))
 
-(deftest auth-claims-expired-token-returns-nil-test
+(deftest auth-claims-returns-nil-for-refused-token-test
   (async done
-         (let [request (js/Request. "http://localhost/graphs"
-                                    #js {:headers #js {"authorization" "Bearer expired-token"}})]
-           (-> (p/with-redefs [authorization/verify-jwt
-                               (fn [_token _env]
-                                 (p/rejected (ex-info "exp" {})))]
-                 (p/let [claims (auth/auth-claims request #js {})]
-                   (is (nil? claims))))
-               (p/then (fn [] (done)))
-               (p/catch (fn [error]
-                          (is false (str error))
-                          (done)))))))
+         (-> (p/let [claims (auth/auth-claims (request-with-token "forged")
+                                              (env-with-verifier
+                                               (fn [_token]
+                                                 (js/Promise.resolve nil))))]
+               (is (nil? claims)))
+             (p/then (fn [] (done)))
+             (p/catch (fn [error]
+                        (is false (str error))
+                        (done))))))
 
-(deftest auth-claims-jwks-error-propagates-test
+(deftest auth-claims-propagates-verifier-failure-test
   (async done
-         (let [request (js/Request. "http://localhost/graphs"
-                                    #js {:headers #js {"authorization" "Bearer broken-token"}})]
-           (-> (p/with-redefs [authorization/verify-jwt
-                               (fn [_token _env]
-                                 (p/rejected (ex-info "jwks" {})))]
-                 (auth/auth-claims request #js {}))
-               (p/then (fn [_]
-                         (is false "expected rejection when jwks fetch fails")
-                         (done)))
-               (p/catch (fn [error]
-                          (is (= "jwks" (ex-message error)))
-                          (done)))))))
+         (-> (auth/auth-claims (request-with-token "any")
+                               (env-with-verifier
+                                (fn [_token]
+                                  (p/rejected (ex-info "openbao unreachable" {})))))
+             (p/then (fn [_]
+                       (is false "expected rejection when the verifier fails")
+                       (done)))
+             (p/catch (fn [error]
+                        (is (= "openbao unreachable" (ex-message error)))
+                        (done))))))
 
-(deftest auth-claims-jwks-error-falls-back-to-unsafe-claims-when-enabled-test
-  (async done
-         (let [token "eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ1MSJ9.signature"
-               request (js/Request. "http://localhost/graphs"
-                                   #js {:headers #js {"authorization" (str "Bearer " token)}})
-               env #js {"DB_SYNC_ALLOW_UNVERIFIED_JWT_CLAIMS" "true"}]
-           (-> (p/with-redefs [authorization/verify-jwt
-                               (fn [_token _env]
-                                 (p/rejected (ex-info "jwks" {})))]
-                 (p/let [claims (auth/auth-claims request env)]
-                   (is (= "u1" (aget claims "sub")))))
-               (p/then (fn [] (done)))
-               (p/catch (fn [error]
-                          (is false (str error))
-                          (done)))))))
-
-(deftest auth-claims-expired-jwt-short-circuits-verification-test
-  (async done
-         (let [expired-token "eyJhbGciOiJSUzI1NiJ9.eyJleHAiOjEsInN1YiI6InUxIn0.signature"
-               request (js/Request. "http://localhost/graphs"
-                                    #js {:headers #js {"authorization" (str "Bearer " expired-token)}})
-               verify-called? (atom false)]
-           (-> (p/with-redefs [authorization/verify-jwt
-                               (fn [_token _env]
-                                 (reset! verify-called? true)
-                                 (p/rejected (ex-info "should-not-be-called" {})))]
-                 (p/let [claims (auth/auth-claims request #js {})]
-                   (is (nil? claims))
-                   (is (false? @verify-called?))))
-               (p/then (fn [] (done)))
-               (p/catch (fn [error]
-                          (is false (str error))
-                          (done)))))))
+(deftest auth-claims-fails-fast-without-verifier-test
+  (is (thrown? js/Error (auth/auth-claims (request-with-token "any") #js {}))))

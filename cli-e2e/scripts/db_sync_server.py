@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import base64
 import ctypes
 import json
 import os
@@ -18,8 +17,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-DEFAULT_COGNITO_ISSUER = "https://cognito-idp.us-east-2.amazonaws.com/us-east-2_kAqZcxIeM"
-DEFAULT_COGNITO_CLIENT_ID = "1qi1uijg8b6ra70nejvbptis0q"
+DEFAULT_TOKEN_AUDIENCE = "logseq-sync"
 
 
 def fail(message: str, **context: object) -> None:
@@ -81,48 +79,32 @@ def terminate_process(pid: int, force: bool) -> bool:
     return True
 
 
-def parse_json_file(path: Path) -> Dict[str, Any]:
+def require_auth_file(path: Path) -> None:
     if not path.exists():
-        fail("sync auth file is missing", auth_path=str(path), hint="Run `logseq login` first.")
+        fail("sync auth file is missing", auth_path=str(path), hint="Run `logseq login` against this server, or pass --mint-auth.")
+
+
+# Helper scripts live in this checkout, next to this launcher, regardless of --repo-root.
+SCRIPTS_DIR = Path(__file__).resolve().parents[2] / "deps" / "db-sync" / "scripts"
+
+
+def run_node_script(repo_root: Path, script: str, args: list, env: Dict[str, str]) -> Dict[str, Any]:
+    script_path = SCRIPTS_DIR / script
+    result = subprocess.run(
+        ["node", str(script_path), *args],
+        cwd=str(repo_root),
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        fail(f"{script} failed", detail=result.stderr.strip() or result.stdout.strip())
+    last_line = result.stdout.strip().splitlines()[-1] if result.stdout.strip() else "{}"
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as error:
-        fail("sync auth file is invalid JSON", auth_path=str(path), detail=str(error))
-    if not isinstance(payload, dict):
-        fail("sync auth file must be a JSON object", auth_path=str(path))
-    return payload
-
-
-def decode_jwt_claims(token: str) -> Optional[Dict[str, Any]]:
-    if not isinstance(token, str):
-        return None
-    parts = token.split(".")
-    if len(parts) != 3:
-        return None
-    payload = parts[1]
-    padded = payload + "=" * ((4 - (len(payload) % 4)) % 4)
-    try:
-        decoded = base64.urlsafe_b64decode(padded.encode("utf-8")).decode("utf-8")
-        claims = json.loads(decoded)
-    except (ValueError, UnicodeDecodeError, json.JSONDecodeError):
-        return None
-    return claims if isinstance(claims, dict) else None
-
-
-def auth_cognito_from_auth_file(auth_path: Path) -> Dict[str, str]:
-    payload = parse_json_file(auth_path)
-    token = payload.get("id-token") or payload.get("access-token")
-    claims = decode_jwt_claims(token) if isinstance(token, str) else None
-
-    issuer = claims.get("iss") if isinstance(claims, dict) else None
-    client_id = None
-    if isinstance(claims, dict):
-        client_id = claims.get("aud") or claims.get("client_id")
-
-    return {
-        "issuer": issuer if isinstance(issuer, str) and issuer else "",
-        "client_id": client_id if isinstance(client_id, str) and client_id else "",
-    }
+        return json.loads(last_line)
+    except json.JSONDecodeError:
+        return {"raw": last_line}
 
 
 def wait_health(base_url: str, timeout_s: float, interval_s: float) -> bool:
@@ -165,23 +147,32 @@ def start_server(args: argparse.Namespace) -> None:
         fail("db-sync server already running", pid=existing_pid, pid_file=str(pid_file))
 
     auth_path = Path(args.auth_path).expanduser().resolve() if args.auth_path else None
-    auth_derived = auth_cognito_from_auth_file(auth_path) if auth_path else {"issuer": "", "client_id": ""}
-
-    issuer = args.cognito_issuer or auth_derived.get("issuer") or DEFAULT_COGNITO_ISSUER
-    client_id = args.cognito_client_id or auth_derived.get("client_id") or DEFAULT_COGNITO_CLIENT_ID
-    jwks_url = args.cognito_jwks_url or f"{issuer}/.well-known/jwks.json"
+    if auth_path and not args.mint_auth:
+        require_auth_file(auth_path)
 
     env = os.environ.copy()
     add_node_path(env, repo_root / "deps" / "db-sync" / "node_modules")
+
+    # The local server signs its own tokens with a development key file; the
+    # same key can mint tokens offline (see deps/db-sync/scripts/mint-token.mjs).
+    signing_key_file = Path(
+        args.signing_key_file
+        or env.get("DB_SYNC_TOKEN_SIGNING_KEY_FILE")
+        or (data_dir / "signing-key.pem")
+    ).expanduser().resolve()
+    run_node_script(repo_root, "generate-signing-key.mjs", [str(signing_key_file)], env)
+
+    base_url = f"http://{args.host}:{args.port}"
+    siwe_domain = f"{args.host}:{args.port}"
     env.update(
         {
             "DB_SYNC_PORT": str(args.port),
             "DB_SYNC_DATA_DIR": str(data_dir),
-            "COGNITO_ISSUER": issuer,
-            "COGNITO_CLIENT_ID": client_id,
-            "COGNITO_JWKS_URL": jwks_url,
-            # CLI e2e sync suite should remain runnable without outbound internet.
-            "DB_SYNC_ALLOW_UNVERIFIED_JWT_CLAIMS": "true",
+            "DB_SYNC_TOKEN_SIGNER": "file",
+            "DB_SYNC_TOKEN_SIGNING_KEY_FILE": str(signing_key_file),
+            "DB_SYNC_TOKEN_ISSUER": base_url,
+            "DB_SYNC_TOKEN_AUDIENCE": DEFAULT_TOKEN_AUDIENCE,
+            "DB_SYNC_SIWE_DOMAINS": ",".join(sorted({siwe_domain, f"localhost:{args.port}", f"127.0.0.1:{args.port}"})),
         }
     )
 
@@ -197,7 +188,6 @@ def start_server(args: argparse.Namespace) -> None:
             start_new_session=True,
         )
 
-    base_url = f"http://{args.host}:{args.port}"
     if not wait_health(base_url, args.startup_timeout_s, args.poll_interval_s):
         terminate_process(process.pid, force=False)
         fail(
@@ -208,6 +198,19 @@ def start_server(args: argparse.Namespace) -> None:
         )
 
     pid_file.write_text(f"{process.pid}\n", encoding="utf-8")
+
+    minted = None
+    if args.mint_auth:
+        if not auth_path:
+            terminate_process(process.pid, force=False)
+            fail("--mint-auth requires --auth-path")
+        minted = run_node_script(
+            repo_root,
+            "siwe-login.mjs",
+            ["--server", base_url, "--domain", siwe_domain, "--write-auth", str(auth_path)],
+            env,
+        )
+
     print(
         json.dumps(
             {
@@ -217,9 +220,11 @@ def start_server(args: argparse.Namespace) -> None:
                 "log_file": str(log_file),
                 "base_url": base_url,
                 "data_dir": str(data_dir),
-                "cognito_issuer": issuer,
-                "cognito_client_id": client_id,
+                "token_issuer": base_url,
+                "token_audience": DEFAULT_TOKEN_AUDIENCE,
+                "signing_key_file": str(signing_key_file),
                 "auth_path": str(auth_path) if auth_path else None,
+                "minted_address": minted.get("address") if isinstance(minted, dict) else None,
             }
         )
     )
@@ -271,9 +276,8 @@ def build_parser() -> argparse.ArgumentParser:
     start.add_argument("--startup-timeout-s", type=float, default=25.0)
     start.add_argument("--poll-interval-s", type=float, default=0.5)
     start.add_argument("--auth-path", default="~/logseq/auth.json")
-    start.add_argument("--cognito-issuer")
-    start.add_argument("--cognito-client-id")
-    start.add_argument("--cognito-jwks-url")
+    start.add_argument("--mint-auth", action="store_true", help="Sign in with a throwaway wallet and write the token to --auth-path")
+    start.add_argument("--signing-key-file", help="RSA private key PEM for the file token signer (default: <data-dir>/signing-key.pem)")
 
     stop = subparsers.add_parser("stop", help="Stop server if running")
     stop.add_argument("--pid-file", required=True)

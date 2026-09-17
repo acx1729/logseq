@@ -1,17 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Local development defaults: a signing key on disk and the web app's dev
+# origin as the SIWE domain. Production sets every variable explicitly and
+# uses DB_SYNC_TOKEN_SIGNER=transit with OpenBao (see README.md).
 : "${DB_SYNC_PORT:=8787}"
+: "${DB_SYNC_DATA_DIR:=data/db-sync}"
+: "${DB_SYNC_TOKEN_ISSUER:=http://127.0.0.1:${DB_SYNC_PORT}}"
+: "${DB_SYNC_TOKEN_SIGNER:=file}"
+: "${DB_SYNC_TOKEN_SIGNING_KEY_FILE:=${DB_SYNC_DATA_DIR}/signing-key.pem}"
+: "${DB_SYNC_SIWE_DOMAINS:=localhost:3001,127.0.0.1:3001,localhost:${DB_SYNC_PORT},127.0.0.1:${DB_SYNC_PORT}}"
 
-# Defaults match the local `pnpm watch` app auth config.
-# Override these env vars for production pool values if needed.
-: "${COGNITO_ISSUER:=https://cognito-idp.us-east-1.amazonaws.com/us-east-1_dtagLnju8}"
-: "${COGNITO_CLIENT_ID:=69cs1lgme7p8kbgld8n5kseii6}"
-: "${COGNITO_JWKS_URL:=https://cognito-idp.us-east-1.amazonaws.com/us-east-1_dtagLnju8/.well-known/jwks.json}"
+export DB_SYNC_PORT DB_SYNC_DATA_DIR DB_SYNC_TOKEN_ISSUER DB_SYNC_TOKEN_SIGNER \
+  DB_SYNC_TOKEN_SIGNING_KEY_FILE DB_SYNC_SIWE_DOMAINS
 
-export DB_SYNC_PORT
-export COGNITO_ISSUER
-export COGNITO_CLIENT_ID
-export COGNITO_JWKS_URL
+if [ "$DB_SYNC_TOKEN_SIGNER" = "file" ]; then
+  node scripts/generate-signing-key.mjs "$DB_SYNC_TOKEN_SIGNING_KEY_FILE"
+fi
 
 node worker/dist/node-adapter.js

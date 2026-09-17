@@ -7,6 +7,7 @@
             [logseq.db-sync.index :as index]
             [logseq.db-sync.logging :as logging]
             [logseq.db-sync.node.assets :as assets]
+            [logseq.db-sync.node.auth :as node-auth]
             [logseq.db-sync.node.config :as config]
             [logseq.db-sync.node.dispatch :as dispatch]
             [logseq.db-sync.node.graph :as graph]
@@ -23,19 +24,16 @@
 
 (logging/install!)
 
-(defn- make-env [cfg index-db assets-bucket]
-  (let [allow-unverified-jwt-claims (some-> js/process .-env (aget "DB_SYNC_ALLOW_UNVERIFIED_JWT_CLAIMS"))
-        env (doto (js-obj)
+(defn- make-env [cfg index-db assets-bucket verify-token]
+  (let [env (doto (js-obj)
               (aset "DB" index-db)
               (aset "LOGSEQ_SYNC_ASSETS" assets-bucket)
               ;; Node adapter serves snapshot transit stream without gzip to avoid
               ;; browser/adapter content-encoding mismatches during graph download.
               (aset "DB_SYNC_SNAPSHOT_STREAM_GZIP" "false")
-              (aset "COGNITO_ISSUER" (:cognito-issuer cfg))
-              (aset "COGNITO_CLIENT_ID" (:cognito-client-id cfg))
-              (aset "COGNITO_JWKS_URL" (:cognito-jwks-url cfg)))]
-    (when (some? allow-unverified-jwt-claims)
-      (aset env "DB_SYNC_ALLOW_UNVERIFIED_JWT_CLAIMS" allow-unverified-jwt-claims))
+              (aset "DB_SYNC_VERIFY_TOKEN" verify-token))]
+    (when-let [admin-token (:admin-token cfg)]
+      (aset env "DB_SYNC_ADMIN_TOKEN" admin-token))
     env))
 
 (defn- request-origin-opts
@@ -62,9 +60,7 @@
 (defn- attach-ws! [^js ctx ^js socket]
   (let [state (.-state ctx)]
     (when-let [add-ws (.-addWebSocket state)]
-      (add-ws socket))
-    (set! (.-serializeAttachment socket) (fn [_] nil))
-    (set! (.-deserializeAttachment socket) (fn [] nil))))
+      (add-ws socket))))
 
 (defn- detach-ws! [^js ctx ^js socket]
   (let [state (.-state ctx)]
@@ -107,6 +103,30 @@
          (detach-ws! ctx socket)
          (log/error :db-sync/ws-error error))))
 
+(defn- handle-upgrade!
+  [{:keys [env registry deps request-origin ^js wss]} req ^js socket head]
+  (let [request (platform-node/request-from-node req request-origin)
+        url (platform/request-url request)
+        path (.-pathname url)
+        parsed (node-routes/parse-sync-path path)
+        graph-id (:graph-id parsed)]
+    (if (and graph-id (seq graph-id))
+      (-> (p/let [allowed? (access-allowed? env graph-id request)]
+            (if allowed?
+              (let [ctx (graph/get-or-create-graph registry deps graph-id)]
+                (p/let [ready-for-sync? (sync-handler/<ready-for-sync? ctx graph-id)]
+                  (if ready-for-sync?
+                    (.handleUpgrade wss req socket head
+                                    (fn [ws-socket]
+                                      (attach-ws! ctx ws-socket)
+                                      (handle-ws-connection ctx env request ws-socket)))
+                    (reject-ws-upgrade! socket 409 "graph not ready"))))
+              (.destroy socket)))
+          (p/catch (fn [error]
+                     (log/error :db-sync/node-upgrade-failed {:error error})
+                     (.destroy socket))))
+      (.destroy socket))))
+
 (defn start!
   [overrides]
   (let [cfg (config/normalize-config overrides)
@@ -114,51 +134,47 @@
         index-db (storage/open-index-db (:data-dir cfg))
         assets-bucket (assets/make-bucket (node-path/join (:data-dir cfg) "assets"))
         registry (atom {})
-        deps {:config cfg
-              :index-db index-db
-              :assets-bucket assets-bucket}
-        env (doto (make-env cfg index-db assets-bucket)
-              (aset "DB_SYNC_DELETE_GRAPH"
-                    (fn [graph-id]
-                      (graph/delete-graph! registry deps graph-id))))
-        server (.createServer http
-                              (fn [req res]
-                                (-> (p/let [request (platform-node/request-from-node req request-origin)
-                                            response (dispatch/handle-node-fetch {:request request
-                                                                                  :env env
-                                                                                  :registry registry
-                                                                                  :deps deps})]
-                                      (platform-node/send-response! res response))
-                                    (p/catch
-                                     (fn [e]
-                                       (log/error :db-sync/node-request-failed {:error e})
-                                       (js/console.error ":db-sync/node-request-failed" e)
-                                       (platform-node/send-response! res (worker-http/error-response "server error" 500)))))))
-        WSS (or (.-WebSocketServer ws) (.-Server ws))
-        ^js wss (new WSS #js {:noServer true})]
-    (.on server "error" (fn [error] (log/error :db-sync/node-server-error {:error error})))
-    (.on wss "error" (fn [error] (log/error :db-sync/node-ws-error {:error error})))
-    (p/let [_ (index/<index-init! index-db)]
+        signer (node-auth/create-signer cfg)]
+    (p/let [_ (index/<index-init! index-db (node-auth/auth-migrations))
+            ^js auth-service (node-auth/create-service cfg signer index-db)
+            verify-token (fn [token] (.verify auth-service token))
+            deps {:config cfg
+                  :index-db index-db
+                  :assets-bucket assets-bucket
+                  :verify-token verify-token}
+            env (doto (make-env cfg index-db assets-bucket verify-token)
+                  (aset "DB_SYNC_DELETE_GRAPH"
+                        (fn [graph-id]
+                          (graph/delete-graph! registry deps graph-id)))
+                  (aset "DB_SYNC_CLOSE_MEMBER_SOCKETS"
+                        (fn [graph-id user-id]
+                          (graph/close-member-sockets! registry graph-id user-id))))
+            server (.createServer http
+                                  (fn [req res]
+                                    (-> (p/let [request (platform-node/request-from-node req request-origin)
+                                                response (dispatch/handle-node-fetch {:request request
+                                                                                      :env env
+                                                                                      :registry registry
+                                                                                      :deps deps
+                                                                                      :auth auth-service})]
+                                          (platform-node/send-response! res response))
+                                        (p/catch
+                                         (fn [e]
+                                           (log/error :db-sync/node-request-failed {:error e})
+                                           (js/console.error ":db-sync/node-request-failed" e)
+                                           (platform-node/send-response! res (worker-http/error-response "server error" 500)))))))
+            WSS (or (.-WebSocketServer ws) (.-Server ws))
+            ^js wss (new WSS #js {:noServer true})]
+      (.on server "error" (fn [error] (log/error :db-sync/node-server-error {:error error})))
+      (.on wss "error" (fn [error] (log/error :db-sync/node-ws-error {:error error})))
       (.on server "upgrade"
-           (fn [req ^js socket head]
-             (let [request (platform-node/request-from-node req request-origin)
-                   url (platform/request-url request)
-                   path (.-pathname url)
-                   parsed (node-routes/parse-sync-path path)
-                   graph-id (:graph-id parsed)]
-               (if (and graph-id (seq graph-id))
-                 (p/let [allowed? (access-allowed? env graph-id request)]
-                   (if allowed?
-                     (let [ctx (graph/get-or-create-graph registry deps graph-id)]
-                       (p/let [ready-for-sync? (sync-handler/<ready-for-sync? ctx graph-id)]
-                         (if ready-for-sync?
-                           (.handleUpgrade wss req socket head
-                                           (fn [ws-socket]
-                                             (attach-ws! ctx ws-socket)
-                                             (handle-ws-connection ctx env request ws-socket)))
-                           (reject-ws-upgrade! socket 409 "graph not ready"))))
-                     (.destroy socket)))
-                 (.destroy socket)))))
+           (fn [req socket head]
+             (handle-upgrade! {:env env
+                               :registry registry
+                               :deps deps
+                               :request-origin request-origin
+                               :wss wss}
+                              req socket head)))
       (p/let [_ (js/Promise.
                  (fn [resolve]
                    (.listen server (:port cfg)
@@ -170,6 +186,7 @@
          :wss wss
          :env env
          :registry registry
+         :auth auth-service
          :port port
          :base-url base-url
          :stop! (fn []

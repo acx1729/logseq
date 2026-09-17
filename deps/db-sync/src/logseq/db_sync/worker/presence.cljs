@@ -1,30 +1,15 @@
 (ns logseq.db-sync.worker.presence
-  (:require [cljs-bean.core :as bean]
-            [clojure.string :as string]
+  (:require [clojure.string :as string]
             [logseq.db-sync.worker.ws :as ws]))
 
 (defn claims->user
   [claims]
   (when claims
     (let [user-id (aget claims "sub")
-          email (aget claims "email")
-          username (or (aget claims "preferred_username")
-                       (aget claims "cognito:username")
-                       (aget claims "username"))
-          name (aget claims "name")]
+          username (aget claims "username")]
       (when (string? user-id)
         (cond-> {:user-id user-id}
-          (string? email) (assoc :email email)
-          (string? username) (assoc :username username)
-          (string? name) (assoc :name name))))))
-
-(defn attachment->user
-  [attachment]
-  (:presence/user (bean/->clj attachment)))
-
-(defn- serialize-attachment!
-  [^js ws user]
-  (.serializeAttachment ws (bean/->js {:presence/user user})))
+          (string? username) (assoc :username username))))))
 
 (defn presence*
   [^js self]
@@ -41,22 +26,20 @@
 
 (defn add-presence!
   [^js self ^js ws user]
-  (swap! (presence* self) assoc ws user)
-  (serialize-attachment! ws user))
+  (swap! (presence* self) assoc ws user))
 
 (defn update-presence!
   [^js self ^js ws {:keys [editing-block-uuid] :as updates}]
   (swap! (presence* self)
          (fn [presence]
            (if-let [user (get presence ws)]
-             (let [user' (if (contains? updates :editing-block-uuid)
-                           (if (and (string? editing-block-uuid)
-                                    (not (string/blank? editing-block-uuid)))
-                             (assoc user :editing-block-uuid editing-block-uuid)
-                             (dissoc user :editing-block-uuid))
-                           user)]
-               (serialize-attachment! ws user')
-               (assoc presence ws user'))
+             (assoc presence ws
+                    (if (contains? updates :editing-block-uuid)
+                      (if (and (string? editing-block-uuid)
+                               (not (string/blank? editing-block-uuid)))
+                        (assoc user :editing-block-uuid editing-block-uuid)
+                        (dissoc user :editing-block-uuid))
+                      user))
              presence))))
 
 (defn get-user

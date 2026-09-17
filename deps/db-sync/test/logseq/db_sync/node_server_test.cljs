@@ -1,7 +1,7 @@
 (ns logseq.db-sync.node-server-test
   (:require [cljs.test :refer [async deftest is]]
-            [logseq.db-sync.node.server :as node-server]
             [logseq.db-sync.platform.node :as platform-node]
+            [logseq.db-sync.test-server :as test-server]
             [logseq.db-sync.worker.auth :as auth]
             [promesa.core :as p]))
 
@@ -34,8 +34,7 @@
            (-> (p/with-redefs [auth/auth-claims
                                (fn [_request _env]
                                  (p/rejected (ex-info "jwks" {})))]
-                 (p/let [{:keys [base-url stop!]} (node-server/start! {:port 0
-                                                                       :data-dir (str "tmp/db-sync-node-server-test/" (random-uuid))})
+                 (p/let [{:keys [base-url stop!]} (test-server/start! "tmp/db-sync-node-server-test/")
                          _ (reset! stop-server! stop!)
                          _ (reset! test-url (str base-url "/graphs"))
                          {:keys [promise sentinel]} (fetch-with-timeout @test-url 1200)
@@ -78,9 +77,8 @@
                                (fn [req opts]
                                  (swap! request-opts conj opts)
                                  (original-request-from-node req opts))]
-                 (p/let [{:keys [port stop!]} (node-server/start! {:port 0
-                                                                   :base-url "https://sync.example.test:9443"
-                                                                   :data-dir (str "tmp/db-sync-node-server-base-url-test/" (random-uuid))})
+                 (p/let [{:keys [port stop!]} (test-server/start! "tmp/db-sync-node-server-base-url-test/"
+                                                                  {:base-url "https://sync.example.test:9443"})
                          _ (reset! stop-server! stop!)
                          response (js/fetch (str "http://localhost:" port "/health"))]
                    (is (= 200 (.-status response)))
@@ -124,8 +122,7 @@
            (-> (p/with-redefs [auth/auth-claims
                                (fn [_request _env]
                                  (p/rejected (ex-info "jwks" {})))]
-                 (p/let [{:keys [base-url stop!]} (node-server/start! {:port 0
-                                                                       :data-dir (str "tmp/db-sync-node-server-log-test/" (random-uuid))})
+                 (p/let [{:keys [base-url stop!]} (test-server/start! "tmp/db-sync-node-server-log-test/")
                          _ (reset! stop-server! stop!)
                          _ (reset! logged-errors [])
                          {:keys [promise sentinel]} (fetch-with-timeout (str base-url "/graphs") 1200)

@@ -54,12 +54,6 @@
   [v]
   (if (false? v) 0 1))
 
-(def ^:private graph-e2ee-migration-sql
-  "alter table graphs add column graph_e2ee INTEGER DEFAULT 1")
-(def ^:private graph-ready-for-use-migration-sql
-  "alter table graphs add column graph_ready_for_use integer default 1")
-(def ^:private user-created-at-migration-sql
-  "alter table users add column created_at integer")
 (def ^:private daily-active-entities-create-table-sql
   (str "create table if not exists daily_active_entities ("
        "day_utc TEXT,"
@@ -72,120 +66,99 @@
 (def ^:private daily-active-entities-create-index-sql
   "create index if not exists idx_daily_active_entities_type_day on daily_active_entities (entity_type, day_utc)")
 
-(defn- duplicate-column-error?
-  [error column-name]
-  (let [message (-> (or (ex-message error) (some-> error .-message) (str error))
-                    string/lower-case)]
-    (and (string/includes? message "duplicate column")
-         (string/includes? message (string/lower-case column-name)))))
+(def ^:private schema-migrations-table-sql
+  (str "create table if not exists schema_migrations ("
+       "id TEXT primary key,"
+       "applied_at INTEGER not null"
+       ");"))
 
-(defn- <ensure-graph-e2ee-column!
-  [db]
-  (letfn [(<run-migration! []
-            (-> (common/<d1-run db graph-e2ee-migration-sql)
-                (p/catch (fn [error]
-                           (if (duplicate-column-error? error "graph_e2ee")
-                             nil
-                             (p/rejected error))))))]
-    (-> (p/let [result (common/<d1-all db
-                                       "select name from pragma_table_info('graphs') where name = 'graph_e2ee'")
-                rows (common/get-sql-rows result)]
-          (when (empty? rows)
-            (<run-migration!)))
-        (p/catch (fn [_]
-                   (<run-migration!))))))
+(def index-migrations
+  "Index database schema, applied in order and recorded in `schema_migrations`.
+  Every schema change is a new entry; DDL stays portable across SQLite and
+  Postgres (no pragma probes, no autoincrement, no `insert or replace`)."
+  [{:id "0001-index-baseline"
+    :statements
+    [(str "create table if not exists graphs ("
+          "graph_id TEXT primary key,"
+          "graph_name TEXT,"
+          "user_id TEXT,"
+          "schema_version TEXT,"
+          "graph_e2ee INTEGER DEFAULT 1,"
+          "graph_ready_for_use INTEGER DEFAULT 1,"
+          "created_at INTEGER,"
+          "updated_at INTEGER"
+          ");")
+     (str "create table if not exists users ("
+          "id TEXT primary key,"
+          "email TEXT,"
+          "email_verified INTEGER,"
+          "username TEXT,"
+          "created_at INTEGER"
+          ");")
+     (str "create table if not exists user_rsa_keys ("
+          "user_id TEXT primary key,"
+          "public_key TEXT,"
+          "encrypted_private_key TEXT,"
+          "created_at INTEGER,"
+          "updated_at INTEGER"
+          ");")
+     (str "create table if not exists graph_members ("
+          "user_id TEXT,"
+          "graph_id TEXT,"
+          "role TEXT,"
+          "invited_by TEXT,"
+          "created_at INTEGER,"
+          "primary key (user_id, graph_id),"
+          "check (role in ('manager', 'member'))"
+          ");")
+     (str "create table if not exists graph_aes_keys ("
+          "graph_id TEXT,"
+          "user_id TEXT,"
+          "encrypted_aes_key TEXT,"
+          "created_at INTEGER,"
+          "updated_at INTEGER,"
+          "primary key (graph_id, user_id)"
+          ");")
+     daily-active-entities-create-table-sql
+     "create index if not exists idx_graph_members_graph_id_created_at on graph_members (graph_id, created_at)"
+     "create index if not exists idx_graphs_user_id_updated_at on graphs (user_id, updated_at desc)"
+     "create index if not exists idx_users_email on users (email)"
+     daily-active-entities-create-index-sql]}])
 
-(defn- <ensure-graph-ready-for-use-column!
-  [db]
-  (letfn [(<run-migration! []
-            (-> (common/<d1-run db graph-ready-for-use-migration-sql)
-                (p/catch (fn [error]
-                           (if (duplicate-column-error? error "graph_ready_for_use")
-                             nil
-                             (p/rejected error))))))]
-    (-> (p/let [result (common/<d1-all db
-                                       "select name from pragma_table_info('graphs') where name = 'graph_ready_for_use'")
-                rows (common/get-sql-rows result)]
-          (when (empty? rows)
-            (<run-migration!)))
-        (p/catch (fn [_]
-                   (<run-migration!))))))
+(defn- <run-statements! [db statements]
+  (reduce (fn [acc statement]
+            (p/then acc (fn [_] (common/<d1-run db statement))))
+          (p/resolved nil)
+          statements))
 
-(defn- <ensure-user-created-at-column!
-  [db]
-  (letfn [(<run-migration! []
-            (-> (common/<d1-run db user-created-at-migration-sql)
-                (p/catch (fn [error]
-                           (if (duplicate-column-error? error "created_at")
-                             nil
-                             (p/rejected error))))))]
-    (-> (p/let [result (common/<d1-all db
-                                       "select name from pragma_table_info('users') where name = 'created_at'")
-                rows (common/get-sql-rows result)]
-          (when (empty? rows)
-            (<run-migration!)))
-        (p/catch (fn [_]
-                   (<run-migration!))))))
+(defn- <applied-migration-ids [db]
+  (p/let [result (common/<d1-all db "select id from schema_migrations")
+          rows (common/get-sql-rows result)]
+    (set (map (fn [row] (aget row "id")) rows))))
 
-(defn <index-init! [db]
-  (p/do!
-   (common/<d1-run db
-                   (str "create table if not exists graphs ("
-                        "graph_id TEXT primary key,"
-                        "graph_name TEXT,"
-                        "user_id TEXT,"
-                        "schema_version TEXT,"
-                        "graph_e2ee INTEGER DEFAULT 1,"
-                        "graph_ready_for_use INTEGER DEFAULT 1,"
-                        "created_at INTEGER,"
-                        "updated_at INTEGER"
-                        ");"))
-   (<ensure-graph-e2ee-column! db)
-   (<ensure-graph-ready-for-use-column! db)
-   (common/<d1-run db
-                   (str "create table if not exists users ("
-                        "id TEXT primary key,"
-                        "email TEXT,"
-                        "email_verified INTEGER,"
-                        "username TEXT,"
-                        "created_at INTEGER"
-                        ");"))
-   (<ensure-user-created-at-column! db)
-   (common/<d1-run db
-                   (str "create table if not exists user_rsa_keys ("
-                        "user_id TEXT primary key,"
-                        "public_key TEXT,"
-                        "encrypted_private_key TEXT,"
-                        "created_at INTEGER,"
-                        "updated_at INTEGER"
-                        ");"))
-   (common/<d1-run db
-                   (str "create table if not exists graph_members ("
-                        "user_id TEXT,"
-                        "graph_id TEXT,"
-                        "role TEXT,"
-                        "invited_by TEXT,"
-                        "created_at INTEGER,"
-                        "primary key (user_id, graph_id),"
-                        "check (role in ('manager', 'member'))"
-                        ");"))
-   (common/<d1-run db
-                   (str "create table if not exists graph_aes_keys ("
-                        "graph_id TEXT,"
-                        "user_id TEXT,"
-                        "encrypted_aes_key TEXT,"
-                        "created_at INTEGER,"
-                        "updated_at INTEGER,"
-                        "primary key (graph_id, user_id)"
-                        ");"))
-   (common/<d1-run db daily-active-entities-create-table-sql)
-   (common/<d1-run db
-                   "create index if not exists idx_graph_members_graph_id_created_at on graph_members (graph_id, created_at)")
-   (common/<d1-run db
-                   "create index if not exists idx_graphs_user_id_updated_at on graphs (user_id, updated_at desc)")
-   (common/<d1-run db
-                   "create index if not exists idx_users_email on users (email)")
-   (common/<d1-run db daily-active-entities-create-index-sql)))
+(defn <apply-migrations!
+  "Applies, in list order, every migration whose id is not yet recorded."
+  [db migrations]
+  (p/let [_ (common/<d1-run db schema-migrations-table-sql)
+          applied (<applied-migration-ids db)]
+    (reduce (fn [acc {:keys [id statements]}]
+              (p/then acc
+                      (fn [_]
+                        (when-not (contains? applied id)
+                          (p/let [_ (<run-statements! db statements)]
+                            (common/<d1-run db
+                                            "insert into schema_migrations (id, applied_at) values (?, ?)"
+                                            id
+                                            (common/now-ms)))))))
+            (p/resolved nil)
+            migrations)))
+
+(defn <index-init!
+  "Bootstraps the index database: the base migrations followed by the ones the
+  adapter contributes (the auth tables), each applied once."
+  ([db] (<index-init! db []))
+  ([db extra-migrations]
+   (<apply-migrations! db (concat index-migrations extra-migrations))))
 
 (defn- utc-day-str
   [timestamp-ms]
@@ -401,7 +374,7 @@
     (when (string? user-id)
       (let [email (aget claims "email")
             email-verified (aget claims "email_verified")
-            username (aget claims "cognito:username")
+            username (aget claims "username")
             email-verified (cond
                              (true? email-verified) 1
                              (false? email-verified) 0
