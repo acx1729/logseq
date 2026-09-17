@@ -34,8 +34,6 @@ export function parseArgs(argv) {
     offlineMs: 2500,
     failFast: false,
     startSyncServer: true,
-    graphE2ee: true,
-    e2eePassword: "11111",
     authPath: "/Users/tiensonqin/logseq/auth.json",
     syncServerPidFile: resolve(repoRoot, "tmp", "cli-concurrent-edit-stress", "db-sync-server.pid"),
     syncServerLogFile: resolve(repoRoot, "tmp", "cli-concurrent-edit-stress", "db-sync-server.log"),
@@ -122,14 +120,8 @@ export function parseArgs(argv) {
       case "--no-start-sync-server":
         opts.startSyncServer = false;
         break;
-      case "--no-e2ee":
-        opts.graphE2ee = false;
-        break;
       case "--auth-path":
         opts.authPath = resolve(next());
-        break;
-      case "--e2ee-password":
-        opts.e2eePassword = next();
         break;
       case "--fail-fast":
         opts.failFast = true;
@@ -204,9 +196,7 @@ Options:
   --offline-ms N        Duration of each offline window. Default: 2500
   --no-start-sync-server
                         Do not auto-start local db-sync when --sync is used
-  --no-e2ee            Initialize the stress graph as non-E2EE for local sync
   --auth-path PATH      Auth JSON for local db-sync. Default: /Users/tiensonqin/logseq/auth.json
-  --e2ee-password TEXT  Password used for local sync upload initialization. Default: 11111
   --concurrency N       Parallel workers. Default: 8
   --max-ops N           Stop after N operations. Default: 0, run forever
   --timeout-ms N        Per-CLI-command timeout. Default: 20000
@@ -655,27 +645,11 @@ export function syncServerStartArgs(opts) {
 }
 
 export function syncUploadArgs(opts) {
-  const args = ["sync", "upload", "--graph", opts.graph];
-  if (opts.graphE2ee !== false) {
-    args.push("--e2ee-password", opts.e2eePassword);
-  }
-  return args;
+  return ["sync", "upload", "--graph", opts.graph];
 }
 
 export function syncDownloadArgs(opts) {
-  const args = ["sync", "download", "--graph", opts.graph];
-  if (opts.graphE2ee !== false) {
-    args.push("--e2ee-password", opts.e2eePassword);
-  }
-  return args;
-}
-
-export function syncEnsureKeysArgs(opts) {
-  return ["sync", "ensure-keys", "--upload-keys", "--e2ee-password", opts.e2eePassword];
-}
-
-export function syncNeedsEnsureKeys(opts) {
-  return opts.graphE2ee !== false;
+  return ["sync", "download", "--graph", opts.graph];
 }
 
 export function graphValidateArgs(opts) {
@@ -823,38 +797,6 @@ async function startDbWorkerNode(opts) {
   return graphServer;
 }
 
-async function setLocalGraphE2ee(opts, graphServer, graphE2ee) {
-  const state = {
-    workerBaseUrl: graphServer["base-url"],
-    repo: graphServerRepo(opts, graphServer),
-    activeIds: new Set(),
-    activeBlockUuids: new Map(),
-    taskIds: new Set(),
-  };
-  const response = await invokeThreadApi(
-    opts,
-    state,
-    "thread-api/transact",
-    [
-      state.repo,
-      [
-        tmap([
-          kw("db/ident"),
-          kw("logseq.kv/graph-rtc-e2ee?"),
-          kw("kv/value"),
-          graphE2ee,
-        ]),
-      ],
-      tmap([kw("outliner-op"), kw("set-kvs")]),
-      null,
-    ],
-    { op: "set-local-graph-e2ee", graphE2ee },
-  );
-  if (!response.ok) {
-    throw new Error(`Failed to set local graph E2EE metadata for ${opts.graph}`);
-  }
-}
-
 async function ensureLocalServers(opts) {
   const graphServer = await startDbWorkerNode(opts);
 
@@ -862,15 +804,6 @@ async function ensureLocalServers(opts) {
     await ensureLocalSyncServer(opts);
     const status = await runCli(opts, ["sync", "status", "--graph", opts.graph], { op: "sync-status-before-start" });
     if (syncStatusUninitialized(status)) {
-      if (opts.graphE2ee === false) {
-        await setLocalGraphE2ee(opts, graphServer, false);
-      }
-      if (syncNeedsEnsureKeys(opts)) {
-        const keys = await runCli(opts, syncEnsureKeysArgs(opts), { op: "sync-ensure-keys" });
-        if (!keys.ok) {
-          throw new Error(`Failed to initialize local sync keys for ${opts.graph}`);
-        }
-      }
       const upload = await runCli(opts, syncUploadArgs(opts), { op: "sync-upload-initialize" });
       if (!upload.ok) {
         throw new Error(`Failed to initialize local sync upload for ${opts.graph}`);
@@ -2893,7 +2826,6 @@ async function main() {
     maxOps: opts.maxOps,
     sync: opts.sync,
     offline: opts.offline,
-    graphE2ee: opts.graphE2ee,
     pageNames: stressPageNames(opts),
   });
 

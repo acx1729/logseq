@@ -1,20 +1,11 @@
 open Cli_effect.Infix
 
 type config_key = Ws_url | Http_base
-type start_opts = { e2ee_password : string option }
-type upload_opts = { e2ee_password : string option }
-type download_opts = { progress : bool option; e2ee_password : string option }
+type download_opts = { progress : bool option }
 
 type asset_download_opts = {
   id : Cli_primitive.db_id option;
   uuid : Cli_primitive.uuid option;
-}
-
-type ensure_keys_opts = { e2ee_password : string option; upload_keys : bool }
-
-type grant_access_opts = {
-  graph_id : Cli_primitive.uuid option;
-  email : Cli_primitive.email option;
 }
 
 type config_get_opts = { key : config_key option }
@@ -23,37 +14,26 @@ type config_unset_opts = { key : config_key option }
 
 type parsed =
   | Parsed_status
-  | Parsed_start of start_opts
+  | Parsed_start
   | Parsed_stop
-  | Parsed_upload of upload_opts
+  | Parsed_upload
   | Parsed_download of download_opts
   | Parsed_asset_download of asset_download_opts
   | Parsed_remote_graphs
-  | Parsed_ensure_keys of ensure_keys_opts
-  | Parsed_grant_access of grant_access_opts
   | Parsed_config_get of config_get_opts
   | Parsed_config_set of config_set_opts
   | Parsed_config_unset of config_unset_opts
 
 type action =
   | Sync_status of { repo : Cli_primitive.repo; graph : Cli_primitive.graph }
-  | Sync_start of {
-      repo : Cli_primitive.repo;
-      graph : Cli_primitive.graph;
-      e2ee_password : string option;
-    }
+  | Sync_start of { repo : Cli_primitive.repo; graph : Cli_primitive.graph }
   | Sync_stop of { repo : Cli_primitive.repo; graph : Cli_primitive.graph }
-  | Sync_upload of {
-      repo : Cli_primitive.repo;
-      graph : Cli_primitive.graph;
-      e2ee_password : string option;
-    }
+  | Sync_upload of { repo : Cli_primitive.repo; graph : Cli_primitive.graph }
   | Sync_download of {
       repo : Cli_primitive.repo;
       graph : Cli_primitive.graph;
       progress : bool;
       progress_explicit : bool;
-      e2ee_password : string option;
       allow_missing_graph : bool;
       require_missing_graph : bool;
     }
@@ -64,13 +44,6 @@ type action =
       uuid : Cli_primitive.uuid option;
     }
   | Sync_remote_graphs
-  | Sync_ensure_keys of { e2ee_password : string option; upload_keys : bool }
-  | Sync_grant_access of {
-      repo : Cli_primitive.repo;
-      graph : Cli_primitive.graph;
-      graph_id : Cli_primitive.uuid;
-      email : Cli_primitive.email;
-    }
   | Sync_config_get of { key : config_key }
   | Sync_config_set of { key : config_key; value : string }
   | Sync_config_unset of { key : config_key }
@@ -78,7 +51,6 @@ type action =
 type remote_graph = {
   graph_id : Cli_primitive.uuid;
   graph_name : Cli_primitive.graph;
-  graph_e2ee : bool;
   raw : Melange_edn_melange.any;
 }
 
@@ -100,14 +72,12 @@ let string_of_config_key = function
 
 let command_id = function
   | Parsed_status -> Command_id.Sync_status
-  | Parsed_start _ -> Sync_start
+  | Parsed_start -> Sync_start
   | Parsed_stop -> Sync_stop
-  | Parsed_upload _ -> Sync_upload
+  | Parsed_upload -> Sync_upload
   | Parsed_download _ -> Sync_download
   | Parsed_asset_download _ -> Sync_asset_download
   | Parsed_remote_graphs -> Sync_remote_graphs
-  | Parsed_ensure_keys _ -> Sync_ensure_keys
-  | Parsed_grant_access _ -> Sync_grant_access
   | Parsed_config_get _ -> Sync_config_get
   | Parsed_config_set _ -> Sync_config_set
   | Parsed_config_unset _ -> Sync_config_unset
@@ -167,19 +137,17 @@ let build ?registry:_ config globals = function
       action_with_repo config
         (fun repo graph -> Sync_status { repo; graph })
         "repo is required for sync-status"
-  | Parsed_start opts ->
+  | Parsed_start ->
       action_with_repo config
-        (fun repo graph ->
-          Sync_start { repo; graph; e2ee_password = opts.e2ee_password })
+        (fun repo graph -> Sync_start { repo; graph })
         "repo is required for sync-start"
   | Parsed_stop ->
       action_with_repo config
         (fun repo graph -> Sync_stop { repo; graph })
         "repo is required for sync-stop"
-  | Parsed_upload opts ->
+  | Parsed_upload ->
       action_with_repo config
-        (fun repo graph ->
-          Sync_upload { repo; graph; e2ee_password = opts.e2ee_password })
+        (fun repo graph -> Sync_upload { repo; graph })
         "repo is required for sync-upload"
   | Parsed_download opts -> (
       let graph, repo = explicit_graph_and_repo globals in
@@ -192,7 +160,6 @@ let build ?registry:_ config globals = function
                  graph;
                  progress = Option.value opts.progress ~default:false;
                  progress_explicit = Option.is_some opts.progress;
-                 e2ee_password = opts.e2ee_password;
                  allow_missing_graph = true;
                  require_missing_graph = true;
                })
@@ -212,23 +179,6 @@ let build ?registry:_ config globals = function
             (Sync_asset_download
                { repo; graph = Cli_config.repo_to_graph repo; id; uuid }))
   | Parsed_remote_graphs -> Ok Sync_remote_graphs
-  | Parsed_ensure_keys opts ->
-      Ok
-        (Sync_ensure_keys
-           {
-             e2ee_password = opts.e2ee_password;
-             upload_keys = opts.upload_keys;
-           })
-  | Parsed_grant_access opts ->
-      Error.bind
-        (action_with_repo config
-           (fun repo graph -> (repo, graph))
-           "repo is required for sync grant-access")
-        (fun (repo, graph) ->
-          Error.bind (require_uuid opts.graph_id "--graph-id is required")
-            (fun graph_id ->
-              Error.bind (require_email opts.email) (fun email ->
-                  Ok (Sync_grant_access { repo; graph; graph_id; email }))))
   | Parsed_config_get opts ->
       Error.bind (require_key opts.key) (fun key ->
           Ok (Sync_config_get { key }))
@@ -355,22 +305,6 @@ let sym name = Edn_util.symbol name
 let vector_vec values = Edn_util.vector_vec values
 let repo_string repo = Cli_primitive.string_of_repo repo
 let graph_string graph = Cli_primitive.string_of_graph graph
-
-let graph_e2ee_query =
-  Cli_primitive.make_datascript_query
-    ~find:(Vec.of_array [| sym "?v"; kw "." |])
-    ~where:
-      (Vec.of_array
-         [|
-           Cli_primitive.V
-             (Edn_util.vector_t_vec
-                (Vec.of_array
-                   [| sym "?e"; kw "db/ident"; kw "logseq.kv/graph-rtc-e2ee?" |]));
-           Cli_primitive.V
-             (Edn_util.vector_t_vec
-                (Vec.of_array [| sym "?e"; kw "kv/value"; sym "?v" |]));
-         |])
-    ()
 
 let sync_download_non_empty_query =
   Cli_primitive.make_datascript_query
@@ -514,10 +448,6 @@ let sync_upload_worker_error value =
   then Error.make ~context:value Error.Graph_already_exists message
   else Error.make ~context:value Error.Sync_upload_failed message
 
-let e2ee_password_worker_error value =
-  worker_error ~code:Error.E2ee_password_failed
-    ~default_message:"e2ee password failed" value
-
 let value_string value = Option.map trim_keyword (Edn_util.as_string_like value)
 
 let remote_graph_values value =
@@ -533,9 +463,6 @@ let remote_graph_id value =
   match Edn_util.get value "graph-id" with
   | Some value -> value_string value
   | None -> None
-
-let remote_graph_e2ee value =
-  Option.value (Edn_util.get_bool value "graph-e2ee?") ~default:false
 
 let find_remote_graph graph graphs =
   remote_graph_values graphs
@@ -711,101 +638,6 @@ let remove_local_asset path =
   if Cli_unix.file_exists path && not (Cli_unix.is_directory path) then
     Cli_unix.remove_tree path
 
-let ensure_keys_args ~upload_keys ~e2ee_password =
-  if not upload_keys then None
-  else
-    let fields = Vec.singleton (kw "ensure-server?", Edn_util.bool true) in
-    let fields =
-      match e2ee_password with
-      | Some password when String.trim password <> "" ->
-          Vec.push_back fields (kw "password", Edn_util.string password)
-      | _ -> fields
-    in
-    Some (Edn_util.map_t_vec fields)
-
-let e2ee_password_not_found repo =
-  Error.make ~hint:"Provide --e2ee-password to verify and persist it."
-    ~context:
-      (Edn_util.map_vec
-         (Vec.of_array
-            [|
-              (kw "repo", Edn_util.string (repo_string repo));
-              (kw "action", kw "sync-start");
-            |]))
-    Error.E2ee_password_not_found "e2ee-password not found"
-
-let missing_refresh_token_error config =
-  Error.make ~hint:"Run `logseq login` first."
-    ~context:
-      (Edn_util.map_vec
-         (Vec.of_array
-            [|
-              (kw "auth-path", Edn_util.string (Auth_state.auth_path config));
-            |]))
-    Error.Missing_auth "missing refresh token"
-
-let refresh_token_required config =
-  match config.Cli_config.refresh_token with
-  | Some token when String.trim token <> "" -> Ok token
-  | _ -> Error (missing_refresh_token_error config)
-
-let contains_substring ~needle text =
-  let needle_len = String.length needle in
-  let text_len = String.length text in
-  let rec loop index =
-    index + needle_len <= text_len
-    && (String.sub text index needle_len = needle || loop (index + 1))
-  in
-  needle_len = 0 || loop 0
-
-let missing_e2ee_password_diagnostic text =
-  let text = String.lowercase_ascii text in
-  Vec.exists
-    (fun needle -> contains_substring ~needle text)
-    (Vec.of_array
-       [|
-         "db-sync/missing-e2ee-password";
-         "missing-e2ee-password";
-         "db-sync/invalid-e2ee-password-payload";
-         "invalid-e2ee-password-payload";
-         "decrypt-text-by-text-password";
-         "e2ee-password-not-found";
-       |])
-
-let ensure_e2ee_password_available config invoke_config repo e2ee_password
-    graph_e2ee =
-  if not graph_e2ee then Cli_effect.pure (Ok ())
-  else
-    match refresh_token_required config with
-    | Error err -> Cli_effect.pure (Error err)
-    | Ok refresh_token ->
-        let verify_e2ee_password =
-          match e2ee_password with
-          | Some password when String.trim password <> "" ->
-              Transport.thread_api_verify_and_save_e2ee_password invoke_config
-                ~refresh_token ~password
-          | _ ->
-              Transport.thread_api_get_e2ee_password invoke_config
-                ~refresh_token
-        in
-        Cli_effect.catch
-          ( verify_e2ee_password >>= fun result ->
-            match tagged_error_value result with
-            | Some value ->
-                let message =
-                  worker_error_message ~default_message:"e2ee password failed"
-                    value
-                in
-                if missing_e2ee_password_diagnostic message then
-                  Cli_effect.pure (Error (e2ee_password_not_found repo))
-                else Cli_effect.pure (Error (e2ee_password_worker_error value))
-            | None -> Cli_effect.pure (Ok ()) )
-          (fun exn ->
-            let message = Printexc.to_string exn in
-            if missing_e2ee_password_diagnostic message then
-              Cli_effect.pure (Error (e2ee_password_not_found repo))
-            else Cli_effect.error exn)
-
 let runtime_error repo status last_error =
   Error.make
     ~hint:
@@ -891,7 +723,7 @@ let sync_download_invoke_config invoke_config =
        else sync_download_timeout_span);
   }
 
-let execute_upload mode config repo e2ee_password =
+let execute_upload mode config repo =
   let command = Command_id.Sync_upload in
   let error err = Cli_effect.pure (Cli_result.error ~command mode err) in
   resolve_runtime_auth_if_available config >>= function
@@ -904,37 +736,16 @@ let execute_upload mode config repo e2ee_password =
           let upload_invoke_config =
             sync_download_invoke_config invoke_config
           in
-          let ensure_upload_e2ee_password () =
-            match e2ee_password with
-            | Some password when String.trim password <> "" -> (
-                let options =
-                  ensure_keys_args ~upload_keys:true ~e2ee_password
-                in
-                Transport.thread_api_db_sync_ensure_user_rsa_keys ?options
-                  upload_invoke_config
-                >>= fun result ->
-                match tagged_error_value result with
-                | Some value ->
-                    Cli_effect.pure (Error (e2ee_password_worker_error value))
-                | None ->
-                    ensure_e2ee_password_available config upload_invoke_config
-                      repo e2ee_password true)
-            | _ -> Cli_effect.pure (Ok ())
-          in
           prepare_worker_runtime upload_invoke_config config >>= fun _ ->
-          ensure_upload_e2ee_password () >>= function
-          | Error err -> error err
-          | Ok () -> (
-              Transport.thread_api_db_sync_upload_graph upload_invoke_config
-                ~repo
-              >>= fun result ->
-              match tagged_error_value result with
-              | Some value -> error (sync_upload_worker_error value)
-              | None ->
-                  Cli_effect.pure
-                    (Cli_result.ok ~command mode (Raw (result_value result))))))
+          Transport.thread_api_db_sync_upload_graph upload_invoke_config ~repo
+          >>= fun result ->
+          match tagged_error_value result with
+          | Some value -> error (sync_upload_worker_error value)
+          | None ->
+              Cli_effect.pure
+                (Cli_result.ok ~command mode (Raw (result_value result)))))
 
-let execute_start mode config repo e2ee_password =
+let execute_start mode config repo =
   let command = Command_id.Sync_start in
   let error err = Cli_effect.pure (Cli_result.error ~command mode err) in
   let ok status = Cli_effect.pure (Cli_result.ok ~command mode (Raw status)) in
@@ -944,31 +755,12 @@ let execute_start mode config repo e2ee_password =
       Server_runtime.ensure_server config repo ~create_empty_db:false
       >>= function
       | Error err -> error err
-      | Ok invoke_config ->
+      | Ok invoke_config -> (
           prepare_worker_runtime invoke_config config >>= fun _ ->
-          let start_sync () =
-            Transport.thread_api_db_sync_start invoke_config ~repo >>= fun _ ->
-            wait_sync_start_ready config invoke_config repo >>= function
-            | Ok status -> ok status
-            | Error err -> error err
-          in
-          Transport.thread_api_q invoke_config ~repo
-            ~query:
-              (Edn_util.vector_t_vec
-                 (Vec.of_array
-                    [|
-                      Edn_util.any
-                        (Cli_primitive.datascript_query_to_edn graph_e2ee_query);
-                    |]))
-          >>= fun graph_e2ee ->
-          let graph_e2ee = Edn_util.as_bool graph_e2ee = Some true in
-          let handle_e2ee = function
-            | Error err -> error err
-            | Ok () -> start_sync ()
-          in
-          ensure_e2ee_password_available config invoke_config repo e2ee_password
-            graph_e2ee
-          >>= handle_e2ee)
+          Transport.thread_api_db_sync_start invoke_config ~repo >>= fun _ ->
+          wait_sync_start_ready config invoke_config repo >>= function
+          | Ok status -> ok status
+          | Error err -> error err))
 
 let execute_remote_graphs mode config =
   Auth_state.resolve_auth config >>= function
@@ -998,74 +790,6 @@ let execute_remote_graphs mode config =
                          (Vec.of_array [| (kw "graphs", graphs_value graphs) |]))))
           ))
 
-let execute_grant_access mode config repo graph_id email =
-  Server_runtime.ensure_server config repo ~create_empty_db:false >>= function
-  | Error err ->
-      Cli_effect.pure
-        (Cli_result.error ~command:Command_id.Sync_grant_access mode err)
-  | Ok invoke_config ->
-      prepare_worker_runtime invoke_config config >>= fun _ ->
-      Transport.thread_api_db_sync_grant_graph_access invoke_config ~repo
-        ~graph_id ~email
-      >>= fun result ->
-      Cli_effect.pure
-        (Cli_result.ok ~command:Command_id.Sync_grant_access mode
-           (Raw (result_value result)))
-
-let verify_e2ee_password_if_provided config invoke_config e2ee_password =
-  match e2ee_password with
-  | Some password when String.trim password <> "" -> (
-      match refresh_token_required config with
-      | Error err -> Cli_effect.pure (Error err)
-      | Ok refresh_token -> (
-          Transport.thread_api_verify_and_save_e2ee_password invoke_config
-            ~refresh_token ~password
-          >>= fun result ->
-          match tagged_error_value result with
-          | Some value ->
-              Cli_effect.pure (Error (e2ee_password_worker_error value))
-          | None -> Cli_effect.pure (Ok ())))
-  | _ -> Cli_effect.pure (Ok ())
-
-let execute_ensure_keys mode config ~upload_keys ~e2ee_password =
-  let command = Command_id.Sync_ensure_keys in
-  let error err = Cli_effect.pure (Cli_result.error ~command mode err) in
-  let ok result = Cli_effect.pure (Cli_result.ok ~command mode (Raw result)) in
-  resolve_runtime_auth_if_available config >>= function
-  | Error err -> error err
-  | Ok config -> (
-      invoke_global_config config >>= function
-      | Error err -> error err
-      | Ok invoke_config -> (
-          prepare_worker_runtime invoke_config config >>= fun _ ->
-          let options = ensure_keys_args ~upload_keys ~e2ee_password in
-          let ensure_keys () =
-            Transport.thread_api_db_sync_ensure_user_rsa_keys ?options
-              invoke_config
-            >>= fun result ->
-            match tagged_error_value result with
-            | Some value ->
-                Cli_effect.pure (Error (e2ee_password_worker_error value))
-            | None -> Cli_effect.pure (Ok (result_value result))
-          in
-          let verify_password () =
-            verify_e2ee_password_if_provided config invoke_config e2ee_password
-          in
-          if upload_keys then
-            ensure_keys () >>= function
-            | Error err -> error err
-            | Ok result -> (
-                verify_password () >>= function
-                | Error err -> error err
-                | Ok () -> ok result)
-          else
-            verify_password () >>= function
-            | Error err -> error err
-            | Ok () -> (
-                ensure_keys () >>= function
-                | Error err -> error err
-                | Ok result -> ok result)))
-
 let ensure_empty_download_db invoke_config repo =
   Transport.thread_api_q invoke_config ~repo
     ~query:
@@ -1083,11 +807,11 @@ let ensure_empty_download_db invoke_config repo =
       Cli_effect.pure (Error (graph_db_not_empty repo count))
   | _ -> Cli_effect.pure (Ok ())
 
-let invoke_download_graph mode _config invoke_config repo graph_id graph_e2ee
-    subscription =
+let invoke_download_graph mode _config invoke_config repo graph_id subscription
+    =
   Cli_effect.finally
     ( Transport.thread_api_db_sync_download_graph_by_id invoke_config ~repo
-        ~graph_id ~graph_e2ee
+        ~graph_id
     >>= fun result ->
       Cli_effect.pure
         (Cli_result.ok ~command:Command_id.Sync_download mode
@@ -1098,14 +822,13 @@ let invoke_download_graph mode _config invoke_config repo graph_id graph_e2ee
       | None -> Cli_effect.pure ())
 
 let execute_download_with_remote mode config repo graph progress
-    progress_explicit e2ee_password remote_graph =
+    progress_explicit remote_graph =
   match remote_graph_id remote_graph with
   | None ->
       Cli_effect.pure
         (Cli_result.error ~command:Command_id.Sync_download mode
            (remote_graph_not_found graph))
   | Some graph_id -> (
-      let graph_e2ee = remote_graph_e2ee remote_graph in
       Server_runtime.ensure_server config repo ~create_empty_db:true
       >>= function
       | Error err ->
@@ -1116,30 +839,21 @@ let execute_download_with_remote mode config repo graph progress
             sync_download_invoke_config invoke_config
           in
           prepare_worker_runtime invoke_config config >>= fun _ ->
-          ensure_e2ee_password_available config invoke_config repo e2ee_password
-            graph_e2ee
-          >>= function
+          ensure_empty_download_db invoke_config repo >>= function
           | Error err ->
               Cli_effect.pure
                 (Cli_result.error ~command:Command_id.Sync_download mode err)
-          | Ok () -> (
-              ensure_empty_download_db invoke_config repo >>= function
-              | Error err ->
-                  Cli_effect.pure
-                    (Cli_result.error ~command:Command_id.Sync_download mode err)
-              | Ok () ->
-                  let progress_enabled =
-                    download_progress_enabled config ~progress
-                      ~progress_explicit
-                  in
-                  maybe_connect_download_progress config download_invoke_config
-                    ~enabled:progress_enabled ~graph_id
-                  >>= fun subscription ->
-                  invoke_download_graph mode config download_invoke_config repo
-                    graph_id graph_e2ee subscription)))
+          | Ok () ->
+              let progress_enabled =
+                download_progress_enabled config ~progress ~progress_explicit
+              in
+              maybe_connect_download_progress config download_invoke_config
+                ~enabled:progress_enabled ~graph_id
+              >>= fun subscription ->
+              invoke_download_graph mode config download_invoke_config repo
+                graph_id subscription))
 
-let execute_download mode config repo graph progress progress_explicit
-    e2ee_password =
+let execute_download mode config repo graph progress progress_explicit =
   let graph_name = graph_string graph in
   resolve_runtime_auth_if_available config >>= function
   | Error err ->
@@ -1167,7 +881,7 @@ let execute_download mode config repo graph progress progress_explicit
                    (remote_graph_not_found graph_name))
           | Some remote_graph ->
               execute_download_with_remote mode config repo graph_name progress
-                progress_explicit e2ee_password remote_graph))
+                progress_explicit remote_graph))
 
 let validate_asset repo graph asset =
   match Edn_util.as_map asset with
@@ -1296,22 +1010,14 @@ let execute_with_mode action config mode =
   | Sync_config_set { key; value } -> execute_config_set mode config key value
   | Sync_config_unset { key } -> execute_config_unset mode config key
   | Sync_status { repo; _ } -> execute_status mode config repo
-  | Sync_start { repo; e2ee_password; _ } ->
-      execute_start mode config repo e2ee_password
+  | Sync_start { repo; _ } -> execute_start mode config repo
   | Sync_stop { repo; _ } -> execute_stop mode config repo
-  | Sync_upload { repo; e2ee_password; _ } ->
-      execute_upload mode config repo e2ee_password
-  | Sync_download { repo; graph; progress; progress_explicit; e2ee_password; _ }
-    ->
+  | Sync_upload { repo; _ } -> execute_upload mode config repo
+  | Sync_download { repo; graph; progress; progress_explicit; _ } ->
       execute_download mode config repo graph progress progress_explicit
-        e2ee_password
   | Sync_asset_download { repo; graph; id; uuid } ->
       execute_asset_download mode config repo graph id uuid
   | Sync_remote_graphs -> execute_remote_graphs mode config
-  | Sync_ensure_keys { e2ee_password; upload_keys } ->
-      execute_ensure_keys mode config ~upload_keys ~e2ee_password
-  | Sync_grant_access { repo; graph_id; email; _ } ->
-      execute_grant_access mode config repo graph_id email
 
 let meta ?(examples = Vec.empty) id doc =
   {
@@ -1335,25 +1041,13 @@ let metadata () =
         ~examples:(Vec.singleton "logseq sync status --graph my-graph")
         Command_id.Sync_status "Show db-sync runtime status";
       meta
-        ~examples:
-          (Vec.of_array
-             [|
-               "logseq sync start --graph my-graph";
-               "logseq sync start --graph my-graph --e2ee-password \
-                \"my-secret\"";
-             |])
+        ~examples:(Vec.singleton "logseq sync start --graph my-graph")
         Sync_start "Start db-sync client";
       meta
         ~examples:(Vec.singleton "logseq sync stop --graph my-graph")
         Sync_stop "Stop db-sync client";
       meta
-        ~examples:
-          (Vec.of_array
-             [|
-               "logseq sync upload --graph my-graph";
-               "logseq sync upload --graph my-graph --e2ee-password \
-                \"my-secret\"";
-             |])
+        ~examples:(Vec.singleton "logseq sync upload --graph my-graph")
         Sync_upload "Initialize upload of the entire graph";
       meta
         ~examples:
@@ -1361,8 +1055,6 @@ let metadata () =
              [|
                "logseq sync download --graph my-graph";
                "logseq sync download --graph my-graph --progress";
-               "logseq sync download --graph my-graph --e2ee-password \
-                \"my-secret\"";
              |])
         Sync_download "Download remote graph snapshot";
       meta
@@ -1376,24 +1068,6 @@ let metadata () =
       meta
         ~examples:(Vec.singleton "logseq sync remote-graphs")
         Sync_remote_graphs "List remote graphs";
-      meta
-        ~examples:
-          (Vec.of_array
-             [|
-               "logseq sync ensure-keys";
-               "logseq sync ensure-keys --e2ee-password \"my-secret\" \
-                --upload-keys";
-             |])
-        Sync_ensure_keys "Ensure user RSA keys for sync/e2ee";
-      meta
-        ~examples:
-          (Vec.of_array
-             [|
-               "logseq sync grant-access --graph my-graph --graph-id \
-                8b6ecdd0-1fab-4a9f-b3fb-3069c5f76e95 --email \
-                teammate@example.com";
-             |])
-        Sync_grant_access "Grant graph access to an email";
       meta
         ~examples:(Vec.singleton "logseq sync config set sync-enabled true")
         Sync_config_set "Set sync config key";

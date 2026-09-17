@@ -25,7 +25,6 @@ Shell-first end-to-end tests for logseq CLI.
   - Parallelism is case-scoped only; each sync case still runs its own setup/main/cleanup sequentially
   - The local db-sync server is shared per suite and starts once before cases begin, then stops once after all cases complete
   - Each sync case gets its own isolated temp root, data directories, home directory, auth copy, and generated config files
-  - Configure sync E2EE password: `--e2ee-password <value>` (default: `11111`)
   - Run only sync MVP case: `bb test-sync --case sync-upload-download-mvp`
 
 ### Sync suite prerequisites

@@ -22,8 +22,6 @@ let default_entries =
         [|
           "logseq graph create --graph my-graph";
           "logseq graph create --graph my-graph --enable-sync";
-          "logseq graph create --graph my-graph --enable-sync --e2ee-password \
-           \"my-secret\"";
         |];
       entry [| "graph"; "switch" |] [| "logseq graph switch --graph my-graph" |];
       entry [| "graph"; "remove" |] [| "logseq graph remove --graph my-graph" |];
@@ -209,22 +207,13 @@ let default_entries =
       entry [| "server"; "restart" |]
         [| "logseq server restart --graph my-graph" |];
       entry [| "sync"; "status" |] [| "logseq sync status --graph my-graph" |];
-      entry [| "sync"; "start" |]
-        [|
-          "logseq sync start --graph my-graph";
-          "logseq sync start --graph my-graph --e2ee-password \"my-secret\"";
-        |];
+      entry [| "sync"; "start" |] [| "logseq sync start --graph my-graph" |];
       entry [| "sync"; "stop" |] [| "logseq sync stop --graph my-graph" |];
-      entry [| "sync"; "upload" |]
-        [|
-          "logseq sync upload --graph my-graph";
-          "logseq sync upload --graph my-graph --e2ee-password \"my-secret\"";
-        |];
+      entry [| "sync"; "upload" |] [| "logseq sync upload --graph my-graph" |];
       entry [| "sync"; "download" |]
         [|
           "logseq sync download --graph my-graph";
           "logseq sync download --graph my-graph --progress";
-          "logseq sync download --graph my-graph --e2ee-password \"my-secret\"";
         |];
       entry
         [| "sync"; "asset"; "download" |]
@@ -233,18 +222,6 @@ let default_entries =
           "logseq sync asset download --graph my-graph --uuid <asset-uuid>";
         |];
       entry [| "sync"; "remote-graphs" |] [| "logseq sync remote-graphs" |];
-      entry
-        [| "sync"; "ensure-keys" |]
-        [|
-          "logseq sync ensure-keys";
-          "logseq sync ensure-keys --e2ee-password \"my-secret\" --upload-keys";
-        |];
-      entry
-        [| "sync"; "grant-access" |]
-        [|
-          "logseq sync grant-access --graph my-graph --graph-id \
-           8b6ecdd0-1fab-4a9f-b3fb-3069c5f76e95 --email teammate@example.com";
-        |];
       entry
         [| "sync"; "config"; "set" |]
         [| "logseq sync config set sync-enabled true" |];

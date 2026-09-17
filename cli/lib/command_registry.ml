@@ -218,8 +218,6 @@ let property_update_options =
 let content_search_options =
   Vec.singleton (value "content" "text" "Content search text")
 
-let e2ee_password_option = value "e2ee-password" "password" "E2EE password"
-
 let options_for_command =
   let empty = Vec.empty in
   function
@@ -227,7 +225,7 @@ let options_for_command =
   | Graph_backup_list ->
       empty
   | Graph_create ->
-      Vec.of_array [| flag "enable-sync" "Enable sync"; e2ee_password_option |]
+      Vec.singleton (flag "enable-sync" "Enable sync")
   | Graph_validate ->
       Vec.singleton
         (option_of_array [| "-f"; "--fix" |] Flag "Fix validation problems")
@@ -419,23 +417,12 @@ let options_for_command =
           value "password" "password" "Account password (requires --username)";
         |]
   | Server_list | Server_cleanup | Server_start | Server_stop | Server_restart
-  | Sync_status | Sync_stop | Sync_remote_graphs | Sync_config_get
-  | Sync_config_unset | Sync_config_set | Logout | Agent_bridge | Example
-  | Skill_show ->
+  | Sync_status | Sync_start | Sync_stop | Sync_upload | Sync_remote_graphs
+  | Sync_config_get | Sync_config_unset | Sync_config_set | Logout
+  | Agent_bridge | Example | Skill_show ->
       empty
-  | Sync_start | Sync_upload -> Vec.singleton e2ee_password_option
-  | Sync_download ->
-      Vec.of_array [| flag "progress" "Stream progress"; e2ee_password_option |]
+  | Sync_download -> Vec.singleton (flag "progress" "Stream progress")
   | Sync_asset_download -> selector_options
-  | Sync_ensure_keys ->
-      Vec.of_array
-        [| e2ee_password_option; flag "upload-keys" "Upload sync keys" |]
-  | Sync_grant_access ->
-      Vec.of_array
-        [|
-          value "graph-id" "graph-id" "Remote graph id";
-          value "email" "email" "Account email";
-        |]
   | Debug_pull ->
       Vec.push_back selector_options (value "ident" "ident" "Entity ident")
   | Doctor -> Vec.singleton (flag "dev-script" "Use development script")

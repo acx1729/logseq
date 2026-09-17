@@ -179,7 +179,7 @@ let allowed_options_for_path path =
     || path3 path "graph" "backup" "list"
   then Vec.empty
   else if path2 path "graph" "create" then
-    option_names [| "enable-sync"; "e2ee-password" |]
+    option_names [| "enable-sync" |]
   else if path2 path "graph" "validate" then option_names [| "fix" |]
   else if path3 path "graph" "backup" "create" then option_names [| "name" |]
   else if path3 path "graph" "backup" "restore" then
@@ -304,19 +304,13 @@ let allowed_options_for_path path =
       (option_names [| "list"; "cleanup"; "start"; "stop"; "restart" |])
   then Vec.empty
   else if
-    path2_any path "sync" (option_names [| "status"; "stop"; "remote-graphs" |])
+    path2_any path "sync"
+      (option_names [| "status"; "start"; "stop"; "upload"; "remote-graphs" |])
     || path3_any path "sync" "config" (option_names [| "get"; "unset" |])
   then Vec.empty
-  else if path2_any path "sync" (option_names [| "start"; "upload" |]) then
-    option_names [| "e2ee-password" |]
-  else if path2 path "sync" "download" then
-    option_names [| "progress"; "e2ee-password" |]
+  else if path2 path "sync" "download" then option_names [| "progress" |]
   else if path3 path "sync" "asset" "download" then
     option_names [| "id"; "uuid" |]
-  else if path2 path "sync" "ensure-keys" then
-    option_names [| "e2ee-password"; "upload-keys" |]
-  else if path2 path "sync" "grant-access" then
-    option_names [| "graph-id"; "email" |]
   else if path3 path "sync" "config" "set" then Vec.empty
   else if path2 path "debug" "pull" then
     option_names [| "id"; "uuid"; "ident" |]
@@ -823,11 +817,7 @@ let parse ?stdin argv =
     | [| "graph"; "create" |] ->
         make [| "graph"; "create" |]
           (Graph
-             (Parsed_create
-                {
-                  enable_sync = option_present "enable-sync" options;
-                  e2ee_password = option_value "e2ee-password" options;
-                }))
+             (Parsed_create { enable_sync = option_present "enable-sync" options }))
     | [| "graph"; "switch" |] ->
         make [| "graph"; "switch" |] (Graph Parsed_switch)
     | [| "graph"; "remove" |] ->
@@ -990,16 +980,10 @@ let parse ?stdin argv =
     | [| "sync"; "status" |] ->
         make [| "sync"; "status" |] (Sync Sync.Parsed_status)
     | [| "sync"; "start" |] ->
-        make [| "sync"; "start" |]
-          (Sync
-             (Sync.Parsed_start
-                { e2ee_password = option_value "e2ee-password" options }))
+        make [| "sync"; "start" |] (Sync Sync.Parsed_start)
     | [| "sync"; "stop" |] -> make [| "sync"; "stop" |] (Sync Sync.Parsed_stop)
     | [| "sync"; "upload" |] ->
-        make [| "sync"; "upload" |]
-          (Sync
-             (Sync.Parsed_upload
-                { e2ee_password = option_value "e2ee-password" options }))
+        make [| "sync"; "upload" |] (Sync Sync.Parsed_upload)
     | [| "sync"; "download" |] ->
         make [| "sync"; "download" |]
           (Sync
@@ -1008,7 +992,6 @@ let parse ?stdin argv =
                   progress =
                     (if option_present "progress" options then Some true
                      else None);
-                  e2ee_password = option_value "e2ee-password" options;
                 }))
     | [| "sync"; "asset"; "download" |] ->
         make
@@ -1021,24 +1004,6 @@ let parse ?stdin argv =
                 }))
     | [| "sync"; "remote-graphs" |] ->
         make [| "sync"; "remote-graphs" |] (Sync Sync.Parsed_remote_graphs)
-    | [| "sync"; "ensure-keys" |] ->
-        make
-          [| "sync"; "ensure-keys" |]
-          (Sync
-             (Sync.Parsed_ensure_keys
-                {
-                  e2ee_password = option_value "e2ee-password" options;
-                  upload_keys = option_present "upload-keys" options;
-                }))
-    | [| "sync"; "grant-access" |] ->
-        make
-          [| "sync"; "grant-access" |]
-          (Sync
-             (Sync.Parsed_grant_access
-                {
-                  graph_id = option_value "graph-id" options;
-                  email = option_value "email" options;
-                }))
     | [| "sync"; "config"; "get"; key |] -> (
         match sync_config_key_or_error (Some key) with
         | Ok key ->

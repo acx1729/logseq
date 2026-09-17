@@ -6,8 +6,6 @@
             [logseq.cli.e2e.shell :as shell]))
 
 (def default-sync-port "18080")
-(def default-e2ee-password "11111")
-(def default-user-keys-graph "sync-e2e-user-keys-bootstrap")
 
 (def ^:private heavy-setup-patterns
   [#"^mkdir -p '\{\{tmp-dir\}\}/home/logseq'$"
@@ -45,24 +43,6 @@
   [command]
   (boolean (some #(string/includes? command %) case-local-resource-markers)))
 
-(defn- suite-user-keys-bootstrap-command
-  [suite-tmp-dir]
-  (let [lock-dir (shell-quote (str (fs/path suite-tmp-dir "user-rsa-keys.lock")))
-        done-file (shell-quote (str (fs/path suite-tmp-dir "user-rsa-keys.ready")))]
-    (format (str "LOCK_DIR=%s; DONE_FILE=%s; "
-                 "if [ -f \"$DONE_FILE\" ]; then exit 0; fi; "
-                 "while ! mkdir \"$LOCK_DIR\" 2>/dev/null; do [ -f \"$DONE_FILE\" ] && exit 0; sleep 0.1; done; "
-                 "trap 'rmdir \"$LOCK_DIR\" 2>/dev/null || true' EXIT; "
-                 "if [ ! -f \"$DONE_FILE\" ]; then "
-                 "{{cli-home}} --root-dir {{root-dir-arg}} --config {{config-path-arg}} --output json graph create --graph {{user-keys-graph-arg}} >/dev/null 2>/dev/null || true; "
-                 "if {{cli-home}} --root-dir {{root-dir-arg}} --config {{config-path-arg}} --output json sync ensure-keys --graph {{user-keys-graph-arg}} --e2ee-password {{e2ee-password-arg}} --upload-keys >/dev/null; then "
-                 "{{cli-home}} --root-dir {{root-dir-arg}} --config {{config-path-arg}} --output json server stop --graph {{user-keys-graph-arg}} >/dev/null 2>/dev/null || true; "
-                 "touch \"$DONE_FILE\"; "
-                 "else exit 1; fi; "
-                 "fi")
-            lock-dir
-            done-file)))
-
 (defn before-suite!
   [{:keys [run-command sync-port]
     :or {run-command shell/run!
@@ -95,11 +75,8 @@
      :sync-ws-url sync-ws-url}))
 
 (defn prepare-case
-  [case {:keys [suite-tmp-dir suite-auth-path sync-port sync-http-base sync-ws-url e2ee-password]}]
-  (let [e2ee-password (or e2ee-password default-e2ee-password)
-        user-keys-graph (or (get-in case [:vars :user-keys-graph])
-                            default-user-keys-graph)
-        setup-commands (vec (:setup case))
+  [case {:keys [suite-auth-path sync-port sync-http-base sync-ws-url]}]
+  (let [setup-commands (vec (:setup case))
         insertion-point? (fn [command]
                            (or (heavy-command? command heavy-setup-patterns)
                                (requires-case-local-resources? command)))
@@ -110,8 +87,6 @@
                             (drop (count leading-setup))
                             (remove #(heavy-command? % heavy-setup-patterns))
                             vec)
-        bootstrap-setup (when suite-tmp-dir
-                          [(suite-user-keys-bootstrap-command suite-tmp-dir)])
         cleanup' (->> (:cleanup case)
                       (remove #(heavy-command? % heavy-cleanup-patterns))
                       vec)]
@@ -119,13 +94,9 @@
         (update :vars merge {:sync-port sync-port
                              :suite-auth-path suite-auth-path
                              :sync-http-base sync-http-base
-                             :sync-ws-url sync-ws-url
-                             :e2ee-password e2ee-password
-                             :e2ee-password-arg (shell-quote e2ee-password)
-                             :user-keys-graph-arg (shell-quote user-keys-graph)})
+                             :sync-ws-url sync-ws-url})
         (assoc :setup (vec (concat leading-setup
                                    (case-local-setup-prefix)
-                                   bootstrap-setup
                                    trailing-setup)))
         (assoc :cleanup cleanup'))))
 

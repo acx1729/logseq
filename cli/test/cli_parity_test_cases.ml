@@ -1137,8 +1137,7 @@ let () =
         write_file cfg_path
           "{:graph \"file-graph\" :root-dir \"file-root\" :timeout-ms 111 \
            :login-timeout-ms 444 :logout-timeout-ms 555 :output-format :edn \
-           :auth-token \"legacy-secret\" :retries 2 :e2ee-password \
-           \"legacy-password\"}\n";
+           :auth-token \"legacy-secret\" :retries 2}\n";
         let config =
           resolve_config
             ~env:
@@ -1170,9 +1169,7 @@ let () =
         (match config.raw_file_config with
         | Some raw ->
             expect_none "sanitized auth-token" (Edn_util.get raw "auth-token");
-            expect_none "sanitized retries" (Edn_util.get raw "retries");
-            expect_none "sanitized e2ee-password"
-              (Edn_util.get raw "e2ee-password")
+            expect_none "sanitized retries" (Edn_util.get raw "retries")
         | None -> fail_test "missing raw file config");
         remove_tree root
       with exn ->
@@ -4076,7 +4073,7 @@ let () =
         (Sync.string_of_config_key Sync.Ws_url);
       expect_none "bad sync key" (Sync.config_key_of_string "graph"));
 
-  test "CLI parity sync build validates repo selectors and e2ee options"
+  test "CLI parity sync build validates repo selectors and download options"
     (fun () ->
       let globals =
         Global_opts.create ~graph:(Cli_primitive.create_graph "demo") ()
@@ -4085,11 +4082,11 @@ let () =
         (Sync.build (config ()) (Global_opts.create ()) Sync.Parsed_status);
       expect_error_code "sync download requires graph" "missing-graph"
         (Sync.build (config ()) (Global_opts.create ())
-           (Sync.Parsed_download { progress = None; e2ee_password = None }));
+           (Sync.Parsed_download { progress = None }));
       let default_download =
         expect_ok "sync download default"
           (Sync.build (config ()) globals
-             (Sync.Parsed_download { progress = None; e2ee_password = None }))
+             (Sync.Parsed_download { progress = None }))
       in
       (match default_download with
       | Sync.Sync_download action ->
@@ -4105,48 +4102,31 @@ let () =
       let explicit_download =
         expect_ok "sync download explicit"
           (Sync.build (config ()) globals
-             (Sync.Parsed_download
-                { progress = Some false; e2ee_password = Some "pw" }))
+             (Sync.Parsed_download { progress = Some false }))
       in
       (match explicit_download with
       | Sync.Sync_download action ->
           expect_bool "download progress false" false action.progress;
-          expect_bool "download progress explicit" true action.progress_explicit;
-          expect_equal "download password" "pw"
-            (expect_some "download e2ee" action.e2ee_password)
+          expect_bool "download progress explicit" true action.progress_explicit
       | _ -> fail_test "expected explicit Sync_download action");
       let start =
         expect_ok "sync start"
           (Sync.build (config ~repo:"demo" ()) (Global_opts.create ())
-             (Sync.Parsed_start { e2ee_password = Some "pw" }))
+             Sync.Parsed_start)
       in
       (match start with
       | Sync.Sync_start action ->
-          expect_equal "start password" "pw"
-            (expect_some "start e2ee" action.e2ee_password)
+          expect_equal "start repo" "logseq_db_demo" (repo_text action.repo)
       | _ -> fail_test "expected Sync_start action");
       let upload =
         expect_ok "sync upload"
           (Sync.build (config ~repo:"demo" ()) (Global_opts.create ())
-             (Sync.Parsed_upload { e2ee_password = Some "pw" }))
+             Sync.Parsed_upload)
       in
-      (match upload with
+      match upload with
       | Sync.Sync_upload action ->
-          expect_equal "upload password" "pw"
-            (expect_some "upload e2ee" action.e2ee_password)
+          expect_equal "upload repo" "logseq_db_demo" (repo_text action.repo)
       | _ -> fail_test "expected Sync_upload action");
-      let ensure_keys =
-        expect_ok "sync ensure keys"
-          (Sync.build (config ()) (Global_opts.create ())
-             (Sync.Parsed_ensure_keys
-                { e2ee_password = Some "pw"; upload_keys = true }))
-      in
-      match ensure_keys with
-      | Sync.Sync_ensure_keys action ->
-          expect_equal "ensure keys password" "pw"
-            (expect_some "ensure keys e2ee" action.e2ee_password);
-          expect_bool "ensure keys upload" true action.upload_keys
-      | _ -> fail_test "expected Sync_ensure_keys action");
 
   test "CLI parity sync build validates config and asset download actions"
     (fun () ->
@@ -4173,17 +4153,6 @@ let () =
           expect_bool "config set key" true (key = Sync.Ws_url);
           expect_equal "config set value" "ws://example/%s" value
       | _ -> fail_test "expected Sync_config_set action");
-      expect_error_code "grant access missing graph id" "invalid-options"
-        (Sync.build (config ~repo:"demo" ()) (Global_opts.create ())
-           (Sync.Parsed_grant_access
-              { graph_id = None; email = Some "user@example.com" }));
-      expect_error_code "grant access missing email" "invalid-options"
-        (Sync.build (config ~repo:"demo" ()) (Global_opts.create ())
-           (Sync.Parsed_grant_access
-              {
-                graph_id = Some "11111111-1111-4111-8111-111111111111";
-                email = None;
-              }));
       let by_id =
         expect_ok "asset download id"
           (Sync.build (config ~repo:"demo" ()) (Global_opts.create ())
@@ -5271,11 +5240,7 @@ let () =
       in
       expect_error_code "graph create requires explicit graph" "missing-graph"
         (Graph.build (config ()) (Global_opts.create ())
-           (Graph.Parsed_create { enable_sync = false; e2ee_password = None }));
-      expect_error_code "graph create password requires sync" "invalid-options"
-        (Graph.build (config ()) globals
-           (Graph.Parsed_create
-              { enable_sync = false; e2ee_password = Some "pw" }));
+           (Graph.Parsed_create { enable_sync = false }));
       Vec.iter
         (fun graph_name ->
           expect_error_code
@@ -5285,22 +5250,18 @@ let () =
                (Global_opts.create
                   ~graph:(Cli_primitive.create_graph graph_name)
                   ())
-               (Graph.Parsed_create
-                  { enable_sync = false; e2ee_password = None })))
+               (Graph.Parsed_create { enable_sync = false })))
         (Vec.of_array [| ""; "   "; "."; " .. " |]);
       let create =
         expect_ok "graph create build"
           (Graph.build (config ()) globals
-             (Graph.Parsed_create
-                { enable_sync = true; e2ee_password = Some "pw" }))
+             (Graph.Parsed_create { enable_sync = true }))
       in
       (match create with
       | Graph.Graph_create { graph; repo; opts } ->
           expect_equal "create graph" "demo" (graph_text graph);
           expect_equal "create repo" "logseq_db_demo" (repo_text repo);
-          expect_bool "create sync" true opts.enable_sync;
-          expect_equal "create password" "pw"
-            (expect_some "create password" opts.e2ee_password)
+          expect_bool "create sync" true opts.enable_sync
       | _ -> fail_test "expected Graph_create action");
       expect_error_code "export edn requires file" "invalid-options"
         (Graph.build (config ~graph:"demo" ()) (Global_opts.create ())
@@ -6502,8 +6463,6 @@ let () =
       in
       expect_bool "graph create enable sync" true
         (Option.is_some (option_by_name "--enable-sync" graph_create.options));
-      expect_bool "graph create password" true
-        (Option.is_some (option_by_name "--e2ee-password" graph_create.options));
       let graph_export =
         expect_some "graph export"
           (Command_registry.find_by_path
@@ -6818,7 +6777,7 @@ let () =
       try
         write_file cfg_path
           "{:graph \"old\" :ws-url \"wss://old.example/%s\" :auth-token \
-           \"secret\" :retries 2 :e2ee-password \"password\"}\n";
+           \"secret\" :retries 2}\n";
         let resolved =
           resolve_config (Global_opts.create ~config_path:cfg_path ())
         in
@@ -6837,8 +6796,6 @@ let () =
         expect_none "removed ws-url" (Edn_util.get parsed "ws-url");
         expect_none "sanitized auth-token" (Edn_util.get parsed "auth-token");
         expect_none "sanitized retries" (Edn_util.get parsed "retries");
-        expect_none "sanitized e2ee-password"
-          (Edn_util.get parsed "e2ee-password");
         remove_tree root
       with exn ->
         remove_tree root;
@@ -7025,13 +6982,11 @@ let () =
       | _ -> fail_test "expected upsert tag");
       let sync_download =
         expect_parse_ok "sync download"
-          [| "sync"; "download"; "--progress"; "--e2ee-password"; "secret" |]
+          [| "sync"; "download"; "--progress" |]
       in
       (match sync_download.command with
       | Cli_request.Sync (Sync.Parsed_download opts) ->
-          expect_bool "progress" true (expect_some "progress" opts.progress);
-          expect_equal "download password" "secret"
-            (expect_some "password" opts.e2ee_password)
+          expect_bool "progress" true (expect_some "progress" opts.progress)
       | _ -> fail_test "expected sync download");
       let sync_asset =
         expect_parse_ok "sync asset"
@@ -7048,33 +7003,13 @@ let () =
           expect_equal "asset uuid" "00000000-0000-4000-8000-000000000001"
             (expect_some "asset uuid" opts.uuid)
       | _ -> fail_test "expected sync asset download");
-      let grant =
-        expect_parse_ok "sync grant"
-          [|
-            "sync";
-            "grant-access";
-            "--graph-id";
-            "00000000-0000-4000-8000-000000000001";
-            "--email";
-            "user@example.com";
-          |]
-      in
-      (match grant.command with
-      | Cli_request.Sync (Sync.Parsed_grant_access opts) ->
-          expect_equal "grant graph id" "00000000-0000-4000-8000-000000000001"
-            (expect_some "graph id" opts.graph_id);
-          expect_equal "grant email" "user@example.com"
-            (expect_some "email" opts.email)
-      | _ -> fail_test "expected sync grant access");
       let graph_create =
         expect_parse_ok "graph create sync"
-          [| "graph"; "create"; "--enable-sync"; "--e2ee-password"; "secret" |]
+          [| "graph"; "create"; "--enable-sync" |]
       in
       (match graph_create.command with
       | Cli_request.Graph (Graph.Parsed_create opts) ->
-          expect_bool "enable sync" true opts.enable_sync;
-          expect_equal "graph password" "secret"
-            (expect_some "graph password" opts.e2ee_password)
+          expect_bool "enable sync" true opts.enable_sync
       | _ -> fail_test "expected graph create");
       expect_parse_error_code "unknown agent subcommand" ":unknown-command"
         [| "agent"; "bridge"; "list" |];

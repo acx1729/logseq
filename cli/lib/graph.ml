@@ -1,6 +1,6 @@
 type export_type = Edn | Sqlite
 type import_type = Import_edn | Import_sqlite
-type create_opts = { enable_sync : bool; e2ee_password : string option }
+type create_opts = { enable_sync : bool }
 type validate_opts = { fix : bool }
 type backup_create_opts = { name : string option }
 type backup_restore_opts = { src : string; dst : Cli_primitive.graph }
@@ -111,9 +111,6 @@ let command_id = function
   | Parsed_import _ -> Graph_import
 
 let validate_parsed = function
-  | Parsed_create opts
-    when Option.is_some opts.e2ee_password && not opts.enable_sync ->
-      Error (Error.invalid_options "--e2ee-password requires --enable-sync")
   | Parsed_export opts
     when opts.export_type = Sqlite
          && (Option.is_some opts.edn_options || opts.pretty_print) ->
@@ -760,27 +757,21 @@ let execute_graph_create_invoke mode _graph repo config =
                     (Edn_util.map_vec
                        (Vec.of_array [| (kw "result", result) |]))))))
 
-let execute_graph_create_enable_sync mode graph repo opts config =
+let execute_graph_create_enable_sync mode graph repo config =
   let open Cli_effect in
   bind (execute_graph_create_invoke mode graph repo config)
     (fun create_result ->
       if Cli_result.is_error create_result then pure create_result
       else
         bind
-          (Sync.execute
-             (Sync.Sync_upload
-                { repo; graph; e2ee_password = opts.e2ee_password })
-             config)
+          (Sync.execute (Sync.Sync_upload { repo; graph }) config)
           (fun upload_result ->
             if Cli_result.is_error upload_result then
               pure
                 (Cli_result.with_command Command_id.Graph_create upload_result)
             else
               bind
-                (Sync.execute
-                   (Sync.Sync_start
-                      { repo; graph; e2ee_password = opts.e2ee_password })
-                   config)
+                (Sync.execute (Sync.Sync_start { repo; graph }) config)
                 (fun start_result ->
                   if Cli_result.is_error start_result then
                     pure
@@ -798,7 +789,7 @@ let execute_graph_create mode graph repo opts config =
       | Error err ->
           pure (Cli_result.error ~command:Command_id.Graph_create mode err)
       | Ok generation ->
-          execute_graph_create_enable_sync mode graph repo opts
+          execute_graph_create_enable_sync mode graph repo
             { config with graph_generation = Some generation })
   else
     match config.Cli_config.base_url with
@@ -1070,8 +1061,6 @@ let metadata () =
              [|
                "logseq graph create --graph my-graph";
                "logseq graph create --graph my-graph --enable-sync";
-               "logseq graph create --graph my-graph --enable-sync \
-                --e2ee-password \"my-secret\"";
              |])
         Graph_create "Create graph";
       meta

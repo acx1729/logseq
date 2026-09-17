@@ -78,7 +78,6 @@ CLI global flags take precedence over environment variables, which take preceden
 
 Legacy notes:
 * Migration note: If you previously used `~/.logseq/cli-graphs` or `~/.logseq/cli.edn`, pass `--root-dir` and/or `--config` to continue using equivalent custom locations.
-* `:e2ee-password` in `cli.edn` is ignored and removed silently during config read/update. Use `sync start --e2ee-password` or `sync download --e2ee-password` instead.
 * `cli.edn` no longer persists cloud auth tokens. CLI login state is stored separately in `~/logseq/auth.json`.
 
 ### Custom Queries
@@ -104,7 +103,7 @@ Auth file contents include the persisted Cognito `id-token`, `access-token`, `re
 Password login:
 - Passwords are passed exactly as supplied, including leading and trailing spaces. Quote shell arguments; use `--password='<password>'` when a password starts with `-`.
 - Command-line passwords can appear in shell history and process listings. This mode does not read credentials from environment variables, stdin, prompts, or `cli.edn`.
-- The account password is separate from an E2EE password. MFA, forced password changes, and other Cognito challenges return an explicit error; challenge continuation and social-provider password login are not supported. You can run `logseq login` separately to use the browser flow.
+- MFA, forced password changes, and other Cognito challenges return an explicit error; challenge continuation and social-provider password login are not supported. You can run `logseq login` separately to use the browser flow.
 - Password authentication uses the us-east-1 Cognito IDP endpoint and the configured OAuth client ID. A custom sync `http-base` does not change that endpoint. The app client must enable `USER_PASSWORD_AUTH` and must not require a client secret.
 - Successful login writes the same private auth file (or configured `:auth-path`) and returns `auth-path`, `updated-at`, and available `email`/`sub`. Password mode omits `authorize-url` and `opened`. It never stores the username/password pair or includes tokens in command output.
 - Authentication, transport, timeout, and response-validation failures leave the existing auth file untouched and exit nonzero. There is no automatic browser retry.
@@ -126,7 +125,6 @@ Graph commands:
 - `graph create --graph <name>` - create a new db graph and switch to it
   - Fails with `graph-exists` if a local graph with the same name already exists
   - `--enable-sync` creates the graph, switches to it, uploads it to Logseq Sync, and starts sync in one command
-  - `--e2ee-password <password>` is accepted only with `--enable-sync` and uses the same password verification path as `sync upload` and `sync start`
 - `graph switch --graph <name>` - switch current graph
 - `graph remove --graph <name>` - remove a graph
 - `graph validate --graph <name>` - validate graph data
@@ -217,23 +215,19 @@ Server ownership behavior:
 
 Sync commands:
 - `sync status --graph <name>` - show db-sync runtime state for a graph daemon
-- `sync start --graph <name> [--e2ee-password <password>]` - start db-sync websocket client for a graph
+- `sync start --graph <name>` - start db-sync websocket client for a graph
 - `sync stop --graph <name>` - stop db-sync client on a graph daemon
 - `sync upload --graph <name>` - upload local graph snapshot to remote
-- `sync download --graph <name> [--progress true|false] [--e2ee-password <password>]` - download remote graph `<name>` into a same-name local graph directory
+- `sync download --graph <name> [--progress true|false]` - download remote graph `<name>` into a same-name local graph directory
 - `sync asset download --graph <name> --id <asset-db-id>` - request one remote asset download by the `ID` shown by `list asset`
 - `sync asset download --graph <name> --uuid <asset-uuid>` - request one remote asset download by asset block UUID
 - `sync remote-graphs [--graph <name>]` - list remote graphs visible to the current login context
-- `sync ensure-keys [--graph <name>]` - ensure user RSA keys for sync/e2ee
-- `sync grant-access --graph <name> --graph-id <uuid> --email <email>` - grant encrypted graph access to a user
 - `sync config set [--graph <name>] ws-url|http-base <value>` - set non-auth db-sync runtime config key
 - `sync config get [--graph <name>] ws-url|http-base` - get non-auth db-sync runtime config key
 - `sync config unset [--graph <name>] ws-url|http-base` - remove non-auth db-sync runtime config key
 
 Sync start behavior:
-- `sync start --e2ee-password <password>` verifies the password against user encrypted private key before persisting it.
-- Verification and persistence run in worker-side sync crypt logic (shared with desktop/web interaction paths).
-- Wrong `--e2ee-password` fails fast and does not overwrite a previously stored encrypted password payload.
+- Every remote graph is encrypted with a key the sync server hands to the graph's members. The worker fetches it over `GET /graphs/<graph-id>/key` the first time it is needed and keeps it in memory only; no password is involved.
 
 Sync upload behavior:
 - `sync upload` requires `--graph <name>`.
@@ -242,7 +236,7 @@ Sync upload behavior:
 - If the local graph does not have a stored remote `graph-id`, upload first lists visible remote graphs and reuses an exact same-name match when one exists.
 - If no same-name remote graph exists, upload creates a new remote graph and persists the returned remote metadata locally before snapshot transfer.
 - Successful upload persists graph identity metadata locally in both client-op state and graph KV (`logseq.kv/graph-uuid`, `logseq.kv/graph-remote?`, and `logseq.kv/graph-rtc-e2ee?`) so CLI and web upload/bootstrap flows stay aligned.
-- Fresh uploads default to encrypted remote graph creation unless local sync metadata explicitly marks the graph as non-e2ee. In headless CLI mode, run `logseq login` first so refresh-token based E2EE password persistence can be used by follow-up `sync start`/`sync download` flows.
+- Fresh uploads create an encrypted remote graph; the server generates the graph key when the graph is created. Run `logseq login` first.
 - `sync upload` returns a real error instead of false success when login state, remote graph bootstrap, or snapshot upload fails.
 - Common upload failures include missing/invalid CLI login state, missing `http-base`, remote graph creation failure, snapshot upload failure, and local DB/worker startup failure.
 - Troubleshooting: after a successful upload, run `graph info --graph <name> --output json` and confirm `data.kv.logseq.kv/graph-uuid` is present. If it is missing, rerun `sync upload` for the same graph to trigger identity backfill.
@@ -258,8 +252,7 @@ Sync download behavior:
 - For structured output (`--output json|edn`), progress is auto-disabled unless explicitly overridden with `--progress true`.
 - `--progress false` always suppresses progress streaming.
 - If the target graph DB is not empty at download time, the CLI returns `graph-db-not-empty` and aborts before import.
-- For e2ee remote graphs, provide `--e2ee-password` on `sync download` (or persist once via `sync start --e2ee-password`).
-- If e2ee password is required but missing, `sync start`, `sync download`, and `sync status` return `e2ee-password-not-found` with a hint to provide `--e2ee-password`.
+- The graph key comes from the sync server; a member of the graph needs nothing else, and a non-member gets a `sync-download-failed` error because the server refuses the key.
 
 Sync asset download behavior:
 - `sync asset download` requires `--graph` and exactly one of `--id` or `--uuid`.
@@ -269,19 +262,13 @@ Sync asset download behavior:
 - The command uses the existing worker asset request API (`:thread-api/db-sync-request-asset-download`) and returns immediately after the worker accepts the enqueue request.
 - Before enqueueing, the CLI checks the local `assets/<asset-uuid>.<asset-type>` file. If the file exists and its checksum matches asset metadata, the command reports `download-requested? false` and skips the request.
 - If the local file exists but its checksum mismatches, the command reports `checksum-status mismatch`, prints a mismatch hint in human output, and requests a re-download.
-- The first version does not accept `--e2ee-password`; persist E2EE password state with existing `sync start` or `sync download` flows before requesting asset download.
 - Structured output includes asset identity and status fields such as `asset-id`, `asset-uuid`, `asset-type`, `download-requested?`, `checksum-status`, `skipped-reason`, and `hint` when applicable. It intentionally omits local filesystem paths.
 
 Sync config persistence:
 - `sync config set/unset` writes non-auth sync config to the CLI config file selected by `--config`.
 - If `--config` is not provided, the default config path is `~/logseq/cli.edn`.
 - `sync config get` reads from that same config source.
-- `:e2ee-password` is not part of sync config and is silently ignored when found in legacy `cli.edn`.
 - Cloud auth is persisted separately in `~/logseq/auth.json`.
-
-E2EE password persistence locations:
-- Browser runtime stores the refresh-token-encrypted password payload in its platform secret storage.
-- Node runtime prefers the OS keychain under the `Logseq E2EE` service. If keychain access fails, it falls back to `<root-dir>/kv-store.json`. CLI E2E mode uses the KV store directly.
 
 Inspect and edit commands:
 - `list page [--expand] [--limit <n>] [--offset <n>] [--sort <field>] [--order asc|desc]` - list pages (defaults to `--sort updated-at --order desc`)
@@ -476,7 +463,7 @@ node ./dist/logseq.js server list
 node ./dist/logseq.js doctor
 node ./dist/logseq.js doctor --dev-script
 node ./dist/logseq.js doctor --output json
-node ./dist/logseq.js --graph demo sync start --e2ee-password "my-secret"
-node ./dist/logseq.js --graph demo sync download --e2ee-password "my-secret"
+node ./dist/logseq.js --graph demo sync start
+node ./dist/logseq.js --graph demo sync download
 node ./dist/logseq.js logout
 ```

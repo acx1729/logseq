@@ -321,7 +321,7 @@ let graph_info_human value =
 
 let remote_graph_columns =
   Vec.of_array
-    [| "graph-name"; "graph-id"; "graph-e2ee?"; "role"; "created-at" |]
+    [| "graph-name"; "graph-id"; "role"; "created-at" |]
 
 let remote_graph_row graph =
   match Edn_util.as_map graph with

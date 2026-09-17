@@ -25,8 +25,6 @@ import {
   stressConfigText,
   stressReferenceViewOrder,
   syncDownloadArgs,
-  syncEnsureKeysArgs,
-  syncNeedsEnsureKeys,
   syncServerStartArgs,
   syncStatusUninitialized,
   syncUploadArgs,
@@ -254,28 +252,8 @@ test("stress config includes runtime auth to avoid refresh during sync start", (
   assert.match(text, /:access-token "access-1"/);
 });
 
-test("builds sync upload initialization command with e2ee password", () => {
-  assert.equal(syncNeedsEnsureKeys({ graphE2ee: true }), true);
-
-  assert.deepEqual(syncEnsureKeysArgs({ e2eePassword: "11111" }), [
-    "sync",
-    "ensure-keys",
-    "--upload-keys",
-    "--e2ee-password",
-    "11111",
-  ]);
-
-  assert.deepEqual(syncUploadArgs({ graph: "pi-memory", e2eePassword: "11111" }), [
-    "sync",
-    "upload",
-    "--graph",
-    "pi-memory",
-    "--e2ee-password",
-    "11111",
-  ]);
-
-  assert.equal(syncNeedsEnsureKeys({ graphE2ee: false }), false);
-  assert.deepEqual(syncUploadArgs({ graph: "pi-memory", e2eePassword: "11111", graphE2ee: false }), [
+test("builds sync upload initialization command", () => {
+  assert.deepEqual(syncUploadArgs({ graph: "pi-memory" }), [
     "sync",
     "upload",
     "--graph",
@@ -328,19 +306,11 @@ test("runs staged JavaScript CLI bundles through node", () => {
 });
 
 test("builds sync download command for replica clients", () => {
-  assert.deepEqual(syncDownloadArgs({ graph: "pi-memory", graphE2ee: false }), [
+  assert.deepEqual(syncDownloadArgs({ graph: "pi-memory" }), [
     "sync",
     "download",
     "--graph",
     "pi-memory",
-  ]);
-  assert.deepEqual(syncDownloadArgs({ graph: "pi-memory", graphE2ee: true, e2eePassword: "11111" }), [
-    "sync",
-    "download",
-    "--graph",
-    "pi-memory",
-    "--e2ee-password",
-    "11111",
   ]);
 });
 

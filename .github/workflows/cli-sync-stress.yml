@@ -137,7 +137,6 @@ jobs:
             --concurrency 8 \
             --sync \
             --offline \
-            --no-e2ee \
             --max-ops 3000 \
             --timeout-ms 60000
 

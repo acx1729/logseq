@@ -49,8 +49,6 @@ type t =
   | Sync_download
   | Sync_asset_download
   | Sync_remote_graphs
-  | Sync_ensure_keys
-  | Sync_grant_access
   | Sync_config_get
   | Sync_config_set
   | Sync_config_unset
@@ -129,8 +127,6 @@ let table =
       ( Sync_remote_graphs,
         "sync-remote-graphs",
         path [| "sync"; "remote-graphs" |] );
-      (Sync_ensure_keys, "sync-ensure-keys", path [| "sync"; "ensure-keys" |]);
-      (Sync_grant_access, "sync-grant-access", path [| "sync"; "grant-access" |]);
       (Sync_config_get, "sync-config-get", path [| "sync"; "config"; "get" |]);
       (Sync_config_set, "sync-config-set", path [| "sync"; "config"; "set" |]);
       ( Sync_config_unset,
@@ -158,8 +154,7 @@ let is_write = function
   | Upsert_page | Upsert_task | Upsert_asset | Upsert_tag | Upsert_property
   | Remove_block | Remove_page | Remove_tag | Remove_property | Sync_start
   | Sync_stop | Sync_upload | Sync_download | Sync_asset_download
-  | Sync_ensure_keys | Sync_grant_access | Sync_config_set | Sync_config_unset
-  | Login | Logout | Skill_install ->
+  | Sync_config_set | Sync_config_unset | Login | Logout | Skill_install ->
       true
   | _ -> false
 
@@ -171,7 +166,7 @@ let requires_graph = function
 
 let requires_auth = function
   | Sync_status | Sync_start | Sync_stop | Sync_upload | Sync_download
-  | Sync_asset_download | Sync_remote_graphs | Sync_ensure_keys
-  | Sync_grant_access | Sync_config_get | Sync_config_set | Sync_config_unset ->
+  | Sync_asset_download | Sync_remote_graphs | Sync_config_get | Sync_config_set
+  | Sync_config_unset ->
       true
   | _ -> false

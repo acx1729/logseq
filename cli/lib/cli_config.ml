@@ -159,7 +159,7 @@ let sanitize_file_config value =
         (fields
         |> Vec.filter (fun (key, _) ->
             match Edn_util.as_string_like key with
-            | Some ("auth-token" | "retries" | "e2ee-password") -> false
+            | Some ("auth-token" | "retries") -> false
             | _ -> true))
   | None -> value
 

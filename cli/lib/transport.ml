@@ -168,26 +168,10 @@ let thread_api_create_or_open_db config ~(repo : Cli_primitive.repo)
     (Vec.of_array [| repo_value repo; Edn_util.any options |])
 
 let thread_api_db_sync_download_graph_by_id config ~(repo : Cli_primitive.repo)
-    ~graph_id ~graph_e2ee =
+    ~graph_id =
   invoke config
     (thread_api_method "db-sync-download-graph-by-id")
-    (Vec.of_array
-       [| repo_value repo; Edn_util.string graph_id; Edn_util.bool graph_e2ee |])
-
-let thread_api_db_sync_ensure_user_rsa_keys ?options config =
-  let args =
-    match options with
-    | None -> Vec.empty
-    | Some options -> Vec.singleton (Edn_util.any options)
-  in
-  invoke config (thread_api_method "db-sync-ensure-user-rsa-keys") args
-
-let thread_api_db_sync_grant_graph_access config ~(repo : Cli_primitive.repo)
-    ~graph_id ~email =
-  invoke config
-    (thread_api_method "db-sync-grant-graph-access")
-    (Vec.of_array
-       [| repo_value repo; Edn_util.string graph_id; Edn_util.string email |])
+    (Vec.of_array [| repo_value repo; Edn_util.string graph_id |])
 
 let thread_api_db_sync_list_remote_graphs config =
   invoke config (thread_api_method "db-sync-list-remote-graphs") Vec.empty
@@ -232,11 +216,6 @@ let thread_api_get_block_refs config ~(repo : Cli_primitive.repo) ~block_id =
     (thread_api_method "get-block-refs")
     (Vec.of_array [| repo_value repo; Edn_util.int64 block_id |])
 
-let thread_api_get_e2ee_password config ~refresh_token =
-  invoke config
-    (thread_api_method "get-e2ee-password")
-    (Vec.singleton (Edn_util.string refresh_token))
-
 let thread_api_import_db_binary config ~(repo : Cli_primitive.repo) ~data =
   invoke config
     (thread_api_method "import-db-binary")
@@ -273,11 +252,6 @@ let thread_api_validate_db config ~(repo : Cli_primitive.repo)
   invoke config
     (thread_api_method "validate-db")
     (Vec.of_array [| repo_value repo; Edn_util.any options |])
-
-let thread_api_verify_and_save_e2ee_password config ~refresh_token ~password =
-  invoke config
-    (thread_api_method "verify-and-save-e2ee-password")
-    (Vec.of_array [| Edn_util.string refresh_token; Edn_util.string password |])
 
 let value_get_string_key key value =
   match Edn_util.as_map value with

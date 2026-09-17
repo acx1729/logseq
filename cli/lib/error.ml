@@ -35,8 +35,6 @@ type code =
   | Doctor_script_missing
   | Doctor_script_unreadable
   | Doctor_server_not_ready
-  | E2ee_password_failed
-  | E2ee_password_not_found
   | Entity_not_found
   | Exception
   | External_asset
@@ -191,8 +189,6 @@ let code_to_string = function
   | Doctor_script_missing -> "doctor-script-missing"
   | Doctor_script_unreadable -> "doctor-script-unreadable"
   | Doctor_server_not_ready -> "doctor-server-not-ready"
-  | E2ee_password_failed -> "e2ee-password-failed"
-  | E2ee_password_not_found -> "e2ee-password-not-found"
   | Entity_not_found -> "entity-not-found"
   | Exception -> "exception"
   | External_asset -> "external-asset"

@@ -174,12 +174,9 @@
                            :targeted-run? targeted-run?}))
         (let [suite-context (when sync-suite?
                               (sync-fixture/before-suite! {:run-command run-command}))
-              sync-context (if suite-context
-                             (assoc suite-context :e2ee-password (:e2ee-password opts))
-                             suite-context)
               run-case* (if sync-suite?
                           (fn [case case-opts]
-                            (run-case (sync-fixture/prepare-case case sync-context)
+                            (run-case (sync-fixture/prepare-case case suite-context)
                                       case-opts))
                           run-case)]
           (try
@@ -332,8 +329,6 @@
                        "Run up to N sync cases in parallel"
                        "Run up to N non-sync cases in parallel")
                      default-cli-jobs))
-    (when sync-suite?
-      (println "      --e2ee-password VALUE  E2EE password for sync commands (Default: 11111)"))
     (println "      --verbose        Enable verbose output")
     (println "      --timings        Print per-step timings and slow-step summary")
     (println)
@@ -349,8 +344,6 @@
     (if sync-suite?
       (println (str "  bb -f cli-e2e/bb.edn " command-name " --case sync-upload-download-mvp"))
       (println (str "  bb -f cli-e2e/bb.edn " command-name " --skip-build --case global-help")))
-    (when sync-suite?
-      (println (str "  bb -f cli-e2e/bb.edn " command-name " --e2ee-password 'my-secret'")))
     (flush)))
 
 (defn- test-suite!

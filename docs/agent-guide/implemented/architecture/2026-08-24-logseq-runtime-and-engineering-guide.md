@@ -244,7 +244,7 @@ database ids as HTML comments.
 
 db-sync separates four concerns:
 
-- index-level graph, membership, access, and E2EE operations;
+- index-level graph, membership, access and graph key operations;
 - graph-scoped ordered sync in a Durable Object;
 - semantic REST operations for external clients;
 - asset storage and signed download access through R2.
@@ -337,7 +337,7 @@ Security and data rules:
 
 - Every operation declares logseq/read or logseq/write OAuth scope.
 - Graph access is checked before dispatch into the graph Durable Object.
-- E2EE graphs fail closed because the server cannot interpret their content.
+- Every graph is encrypted, so semantic routes fail closed because the server cannot interpret graph content.
 - Rate limiting happens before expensive Durable Object work.
 - Property mutations use typed DB graph properties, not file-graph key:: text.
 - Task creation uses the Task class and typed status/priority/date properties,
@@ -350,7 +350,7 @@ MCP is a thin integration over the semantic API. entry.mjs owns request wiring,
 chatgpt_app.mjs owns app metadata, and chatgpt_asset_upload.mjs adapts asset
 uploads. Do not create a second independent mutation API for MCP tools.
 
-#### Authentication and E2EE state
+#### Authentication and graph keys
 
 Worker auth belongs in frontend.worker.state/*state under namespaced keys:
 
@@ -365,18 +365,17 @@ frontend.worker.state/*db-sync-config contains transport configuration such as
 :ws-url and :http-base. non-auth-db-sync-config strips auth-shaped keys before
 storing transport config.
 
-E2EE password rules:
+Graph key rules:
 
-- Never store plaintext passwords in cli.edn or db-sync config.
-- Verify a supplied password against the encrypted private key before saving it.
-- Do not overwrite a valid stored payload after a failed verification.
-- Encrypt the persisted password with material derived from the refresh token.
-- Browser storage uses the platform secret store.
-- The Node platform prefers the OS keychain under the Logseq E2EE service.
-- If keychain access fails, Node falls back to root-dir/kv-store.json.
-- CLI E2E mode uses the KV store directly so tests do not mutate the keychain.
-- Headless flows fail with a missing-password error and a command hint.
-- Interactive browser/Desktop flows may request a password through ui-request.
+- Every remote graph has one AES-256 key that the sync server generates on
+  creation and serves to members at GET /graphs/:graph-id/key.
+- The worker fetches the key the first time it is needed in a session and
+  keeps it in memory only; nothing about it is written to disk, cli.edn,
+  db-sync config, the keychain or browser storage.
+- There are no encryption passwords, user key pairs or key grants; access to
+  the key is membership, and removing a member does not rotate the key.
+- A key fetch failure is a sync error with the server's status; do not fall
+  back to an unencrypted path.
 
 CLI cloud tokens are stored separately in ~/logseq/auth.json. Runtime sync
 receives auth state in memory.
@@ -434,7 +433,7 @@ has advanced. It must not overwrite an existing different checksum.
 D1 schema changes require SQL migrations in deps/db-sync/worker/migrations.
 Runtime schema initialization is not a substitute for a migration.
 
-db-sync should fail closed on invalid auth, graph access, E2EE semantic access,
+db-sync should fail closed on invalid auth, graph access, semantic access,
 stale ordering, invalid snapshots, and malformed transaction payloads. Do not
 introduce defaults that hide corrupt state.
 
@@ -574,7 +573,7 @@ With the default root, runtime files may include:
 ~~~
 
 Configuration precedence is global flag, then environment variable, then
-cli.edn. Auth tokens and E2EE passwords are not CLI config fields.
+cli.edn. Auth tokens are not CLI config fields.
 
 Output modes:
 
@@ -631,7 +630,7 @@ CLI sync reuses worker-side sync logic:
 - a valid local asset skips the remote request;
 - a checksum mismatch requests a new download;
 - sync config accepts transport keys only;
-- E2EE password verification and storage remain worker-owned.
+- graph key fetching and caching remain worker-owned.
 
 doctor validates the daemon bundle, root permissions, running server readiness,
 and revision compatibility. When startup reports missing bundled modules, rebuild

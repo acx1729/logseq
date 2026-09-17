@@ -21,7 +21,6 @@ const DEFAULT_HEADED = true;
 const DEFAULT_AUTO_CONNECT = false;
 const DEFAULT_RESET_SESSION = true;
 const DEFAULT_TARGET_GRAPH = 'db1';
-const DEFAULT_E2E_PASSWORD = '12345';
 const DEFAULT_SWITCH_GRAPH_TIMEOUT_MS = 100000;
 const DEFAULT_CHROME_LAUNCH_ARGS = [
   '--new-window',
@@ -123,7 +122,6 @@ function usage() {
     `  --session <name>            agent-browser session name (default: ${DEFAULT_SESSION_NAME})`,
     `  --instances <n>             Number of concurrent browser instances (default: ${DEFAULT_INSTANCES})`,
     `  --graph <name>              Graph name to switch/download before ops (default: ${DEFAULT_TARGET_GRAPH})`,
-    `  --e2e-password <text>       Password for E2EE modal if prompted (default: ${DEFAULT_E2E_PASSWORD})`,
     '  --profile <name|path|auto|none> Chrome profile to reuse login state (default: auto)',
     '                              auto = prefer Default, then logseq.com',
     '                              none = do not pass --profile to agent-browser (isolated profile)',
@@ -176,7 +174,6 @@ function parseArgs(argv) {
     session: DEFAULT_SESSION_NAME,
     instances: DEFAULT_INSTANCES,
     graph: DEFAULT_TARGET_GRAPH,
-    e2ePassword: DEFAULT_E2E_PASSWORD,
     profile: DEFAULT_CHROME_PROFILE,
     executablePath: null,
     autoConnect: DEFAULT_AUTO_CONNECT,
@@ -285,15 +282,6 @@ function parseArgs(argv) {
         throw new Error('--graph must be a non-empty string');
       }
       result.graph = next;
-      i += 1;
-      continue;
-    }
-
-    if (arg === '--e2e-password') {
-      if (typeof next !== 'string' || next.length === 0) {
-        throw new Error('--e2e-password must be a non-empty string');
-      }
-      result.e2ePassword = next;
       i += 1;
       continue;
     }
@@ -3502,11 +3490,9 @@ function buildGraphBootstrapProgram(config) {
       state.initialGraphName = null;
       state.initialRepoName = null;
       state.initialTargetMatched = null;
-      state.passwordAttempts = 0;
       state.refreshCount = 0;
       state.graphDetected = false;
       state.graphCardClicked = false;
-      state.passwordSubmitted = false;
       state.actionTriggered = false;
       state.gotoGraphsOk = false;
       state.gotoGraphsError = null;
@@ -3521,11 +3507,9 @@ function buildGraphBootstrapProgram(config) {
     }
     state.runId = config.runId;
     state.targetGraph = config.graphName;
-    if (typeof state.passwordAttempts !== 'number') state.passwordAttempts = 0;
     if (typeof state.refreshCount !== 'number') state.refreshCount = 0;
     if (typeof state.graphDetected !== 'boolean') state.graphDetected = false;
     if (typeof state.graphCardClicked !== 'boolean') state.graphCardClicked = false;
-    if (typeof state.passwordSubmitted !== 'boolean') state.passwordSubmitted = false;
     if (typeof state.actionTriggered !== 'boolean') state.actionTriggered = false;
     if (typeof state.gotoGraphsOk !== 'boolean') state.gotoGraphsOk = false;
     if (typeof state.gotoGraphsError !== 'string' && state.gotoGraphsError !== null) state.gotoGraphsError = null;
@@ -3763,36 +3747,6 @@ function buildGraphBootstrapProgram(config) {
       onGraphsPage = location.hash.includes('/graphs');
     }
 
-    const modal = document.querySelector('.e2ee-password-modal-content');
-    const passwordModalVisible = !!modal;
-    let passwordAttempted = false;
-    let passwordSubmittedThisStep = false;
-    if (modal) {
-      const passwordInputs = Array.from(
-        modal.querySelectorAll('input[type="password"], .ls-toggle-password-input input, input')
-      );
-      if (passwordInputs.length >= 2) {
-        setInputValue(passwordInputs[0], config.password);
-        setInputValue(passwordInputs[1], config.password);
-        passwordAttempted = true;
-      } else if (passwordInputs.length === 1) {
-        setInputValue(passwordInputs[0], config.password);
-        passwordAttempted = true;
-      }
-
-      if (passwordAttempted) {
-        state.passwordAttempts += 1;
-      }
-
-      const submitButton = Array.from(modal.querySelectorAll('button'))
-        .find((button) => /(submit|open|unlock|confirm|enter)/i.test((button.textContent || '').trim()));
-      if (submitButton && !submitButton.disabled) {
-        passwordSubmittedThisStep = dispatchClick(submitButton);
-        state.passwordSubmitted = state.passwordSubmitted || passwordSubmittedThisStep;
-        state.actionTriggered = state.actionTriggered || passwordSubmittedThisStep;
-      }
-    }
-
     let graphCardClickedThisStep = false;
     let refreshClickedThisStep = false;
     if (location.hash.includes('/graphs')) {
@@ -3859,7 +3813,6 @@ function buildGraphBootstrapProgram(config) {
     if (
       !switchedToTargetGraph &&
       !onGraphsPageFinal &&
-      !passwordModalVisible &&
       !state.downloadStarted &&
       !state.graphCardClicked
     ) {
@@ -3872,7 +3825,6 @@ function buildGraphBootstrapProgram(config) {
     }
     const needsReadinessProbe =
       switchedToTargetGraph &&
-      !passwordModalVisible &&
       !downloadingGraphUuid;
     const readyProbe = needsReadinessProbe
       ? await probeGraphReady()
@@ -3887,7 +3839,6 @@ function buildGraphBootstrapProgram(config) {
     const requiresAction = config.requireAction !== false;
     const ok =
       switchedToTargetGraph &&
-      !passwordModalVisible &&
       !downloadingGraphUuid &&
       readyProbe.ok &&
       downloadLifecycleSatisfied &&
@@ -3921,11 +3872,6 @@ function buildGraphBootstrapProgram(config) {
       switchAttempts: state.switchAttempts,
       refreshCount: state.refreshCount,
       refreshClickedThisStep,
-      passwordAttempts: state.passwordAttempts,
-      passwordAttempted,
-      passwordModalVisible,
-      passwordSubmitted: state.passwordSubmitted,
-      passwordSubmittedThisStep,
       downloadStarted: state.downloadStarted,
       downloadCompleted: state.downloadCompleted,
       downloadCompletionSource: state.downloadCompletionSource,
@@ -3945,7 +3891,6 @@ async function runGraphBootstrap(sessionName, args, runOptions) {
     const bootstrapProgram = buildGraphBootstrapProgram({
       runId: bootstrapRunId,
       graphName: args.graph,
-      password: args.e2ePassword,
       forceSelection: true,
       requireAction: true,
     });
@@ -4818,7 +4763,6 @@ async function main() {
     session: args.session,
     instances: args.instances,
     graph: args.graph,
-    e2ePassword: args.e2ePassword,
     switchTimeoutMs: args.switchTimeoutMs,
     profile: args.profile,
     executablePath: args.executablePath,

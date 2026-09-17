@@ -676,8 +676,7 @@
     (is (not (string/includes? output "--skip-build --case sync-upload-download-mvp")))
     (is (string/includes? output "Default: 4"))
     (is (string/includes? output "--timings"))
-    (is (string/includes? output "--e2ee-password VALUE"))
-    (is (string/includes? output "Default: 11111"))))
+    (is (not (string/includes? output "--e2ee-password")))))
 
 (deftest run-does-not-pass-force-build-to-preflight
   (let [preflight-call (atom nil)]
