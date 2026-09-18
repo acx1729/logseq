@@ -9,7 +9,6 @@
             [frontend.components.avatar :as avatar]
             [frontend.components.block :as component-block]
             [frontend.components.block.breadcrumb-model :as breadcrumb-model]
-            [frontend.components.email :as email-component]
             [frontend.components.export :as export]
             [frontend.components.page-menu :as page-menu]
             [frontend.components.plugins :as plugins]
@@ -33,7 +32,6 @@
             [frontend.state :as state]
             [frontend.ui :as ui]
             [frontend.util :as util]
-            [frontend.util.email :as email-util]
             [frontend.util.entity :as entity]
             [frontend.version :refer [version]]
             [logseq.common.config :as common-config]
@@ -97,13 +95,12 @@
   (some #(when (= current-repo (:url %)) %) rtc-graphs))
 
 (defn- rtc-indicator-visible?
-  [{:keys [current-repo rtc-graphs db-rtc-uuid rtc-state logged-in? rtc-group?]}]
+  [{:keys [current-repo rtc-graphs db-rtc-uuid rtc-state logged-in?]}]
   (let [remote-graph (current-remote-rtc-graph current-repo rtc-graphs)
         remote-graph-uuid (some-> (:GraphUUID remote-graph) str)
         state-graph-uuid (some-> (:graph-uuid rtc-state) str)]
     (and current-repo
          logged-in?
-         rtc-group?
          remote-graph
          (or db-rtc-uuid
              (and (seq state-graph-uuid)
@@ -121,7 +118,6 @@
 (hsx/defc rtc-collaborators
   []
   (let [rtc-graph-id (use-db-rtc-uuid (state/get-current-repo))
-        config (rfx/use-sub [:config])
         online-users (rfx/use-sub [:rtc/state :online-users])]
     (when rtc-graph-id
       [:div.rtc-collaborators.flex.gap-1.text-sm.bg-gray-01.items-center
@@ -134,17 +130,15 @@
                                             {:id :rtc-collaborators})})
 
        (when (seq online-users)
-         (for [{user-email :user/email
-                user-name :user/name
+         (for [{user-name :user/name
                 user-uuid :user/uuid} online-users
-               :when user-name
-               :let [key (str "rtc-user-" (or user-uuid user-email user-name))]]
+               :let [key (str "rtc-user-" user-uuid)]]
            ^{:key key}
            [:<>
             (avatar/user-avatar
              {:class "w-5 h-5"
               :style {:app-region "no-drag"}
-              :title (email-util/display-email user-email config)
+              :title (str user-name " " (user-handler/short-address user-uuid))
               :name user-name
               :uuid user-uuid
               :fallback-props {:style {:font-size 11}}})]))])))
@@ -203,7 +197,7 @@
                           :options {:on-click #(shui/dialog-open! (fn [] (page-menu/publish-page-dialog page))
                                                                   {:class "w-auto max-w-md"})}}]))))
         page-menu-and-hr (concat page-menu [{:hr true}])
-        login? (and (rfx/use-sub [:auth/id-token]) (user-handler/logged-in?))
+        login? (and (rfx/use-sub [:auth/access-token]) (user-handler/logged-in?))
         items (fn []
                 (->>
                  [(when (state/enable-editing?)
@@ -249,8 +243,8 @@
                   (when login?
                     {:item [:span.flex.flex-col.relative.group.pt-1.w-full
                             [:b.leading-none (user-handler/username)]
-                            [:small.opacity-70
-                             (email-component/email-address {:email (user-handler/email)})]
+                            [:small.opacity-70.font-mono
+                             (some-> (user-handler/address) user-handler/short-address)]
                             (ui/tooltip
                              (shui/button
                               {:type "button"
@@ -578,8 +572,7 @@
                :rtc-graphs rtc-graphs
                :db-rtc-uuid db-rtc-uuid
                :rtc-state rtc-state
-               :logged-in? (user-handler/logged-in?)
-               :rtc-group? (user-handler/rtc-group?)})
+               :logged-in? (user-handler/logged-in?)})
          [:<>
           (recent-slider)
           ^{:key (str "collab-" current-repo)}
@@ -627,6 +620,5 @@
 
 (hsx/defc header
   [opts]
-  (let [_user-groups (rfx/use-sub [:user/info :UserGroups])
-        _rtc-running? (rfx/use-sub [:rtc/state :rtc-lock])]
+  (let [_rtc-running? (rfx/use-sub [:rtc/state :rtc-lock])]
     (header-aux opts)))

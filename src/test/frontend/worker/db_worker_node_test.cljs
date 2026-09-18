@@ -781,7 +781,7 @@
         bound-repo "logseq_db_bound"]
     (is (nil? (repo-error :thread-api/list-db [] bound-repo)))
     (is (nil? (repo-error :thread-api/get-db-sync-config [] bound-repo)))
-    (is (nil? (repo-error :thread-api/sync-app-state [{:auth/id-token "token"}] bound-repo)))
+    (is (nil? (repo-error :thread-api/sync-app-state [{:auth/access-token "token"}] bound-repo)))
     (is (nil? (repo-error :thread-api/db-sync-list-remote-graphs [] bound-repo)))
     (is (nil? (repo-error "thread-api/list-db" [] bound-repo)))
     (is (nil? (repo-error :thread-api/set-context [{:repo "not-a-repo-arg"}] bound-repo)))
@@ -816,7 +816,7 @@
                        _ (invoke host port "thread-api/set-db-sync-config"
                                  [{:ws-url "wss://example.com/sync/%s"}])
                        _ (invoke host port "thread-api/sync-app-state"
-                                 [{:auth/id-token "token-value"}])
+                                 [{:auth/access-token "token-value"}])
                        config (invoke host port "thread-api/get-db-sync-config" [])
                        _ (is (= "wss://example.com/sync/%s" (:ws-url config)))
                        _ (is (not (contains? config :auth-token)))

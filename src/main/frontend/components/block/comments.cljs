@@ -412,8 +412,8 @@
 (hsx/defc subscribed-comment-row
   [config comment-uuid *hide-block-refs? *show-query? renderers]
   (let [comment-block (db-hooks/use-block comment-uuid)
-        id-token (rfx/use-sub [:auth/id-token])
-        current-user-uuid (some-> id-token user-handler/parse-jwt :sub)]
+        _ (rfx/use-sub [:auth/access-token])
+        current-user-uuid (user-handler/user-uuid)]
     (when comment-block
       (comment-row-view config comment-block current-user-uuid
                         *hide-block-refs? *show-query? renderers))))

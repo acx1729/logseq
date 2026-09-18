@@ -5,7 +5,7 @@
             ["@logseq/graph-lifecycle" :as lifecycle]
             ["abort-controller" :as AbortController]
             ["buffer" :as buffer]
-            ["electron" :refer [app dialog ipcMain shell]]
+            ["electron" :refer [app dialog ipcMain safeStorage shell]]
             ["electron-updater" :refer [autoUpdater]]
             ["electron-window-state" :as windowStateKeeper]
             ["fs" :as fs]
@@ -301,6 +301,73 @@
 
 (defmethod handle :getLogseqDotDirRoot []
   (utils/get-ls-dotdir-root))
+
+;;; The wallet identity this device holds and the session token the CLI reads.
+
+(defn- wallet-identity-path
+  []
+  (node-path/join cfgs/cfg-root "wallet-identity.json"))
+
+(defn- cli-auth-path
+  []
+  (node-path/join (os/homedir) "logseq" "auth.json"))
+
+(defn- write-private-file!
+  "Writes `content` readable by the owner only."
+  [path content]
+  (fs-extra/ensureDirSync (node-path/dirname path))
+  (fs/writeFileSync path content #js {:mode 0600})
+  (fs/chmodSync path 0600))
+
+(defn- remove-file!
+  [path]
+  (when (fs/existsSync path)
+    (fs/unlinkSync path))
+  nil)
+
+(defn- seal
+  "Encrypts with the OS keychain when Electron has one; otherwise the file
+   says so and holds the text as written."
+  [text]
+  (if (.isEncryptionAvailable safeStorage)
+    {:encrypted true
+     :data (.toString (.encryptString safeStorage text) "base64")}
+    {:encrypted false
+     :data text}))
+
+(defn- unseal
+  [{:keys [encrypted data]}]
+  (if encrypted
+    (let [^js Buf (.-Buffer buffer)]
+      (.decryptString safeStorage (.from Buf data "base64")))
+    data))
+
+(defmethod handle :identity/read []
+  (let [path (wallet-identity-path)]
+    (when (fs/existsSync path)
+      (-> (fs/readFileSync path "utf8")
+          js/JSON.parse
+          (js->clj :keywordize-keys true)
+          unseal
+          js/JSON.parse
+          (js->clj :keywordize-keys true)))))
+
+(defmethod handle :identity/write [_window [_ identity]]
+  (write-private-file! (wallet-identity-path)
+                       (js/JSON.stringify (clj->js (seal (js/JSON.stringify (clj->js identity))))))
+  nil)
+
+(defmethod handle :identity/remove []
+  (remove-file! (wallet-identity-path)))
+
+(defmethod handle :session/write-token [_window [_ token]]
+  (write-private-file! (cli-auth-path)
+                       (js/JSON.stringify #js {:access-token token
+                                               :updated-at (js/Date.now)}))
+  nil)
+
+(defmethod handle :session/remove-token []
+  (remove-file! (cli-auth-path)))
 
 (defmethod handle :setProxy [_win [_ options]]
   ;; options: {:type "system" | "direct" | "socks5" | "http" | ... }

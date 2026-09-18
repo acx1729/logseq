@@ -2,7 +2,6 @@
   "Mobile settings"
   (:require [clojure.string :as string]
             [frontend.components.dnd :as dnd]
-            [frontend.components.email :as email-component]
             [frontend.components.user.login :as login]
             [frontend.config :as config]
             [frontend.context.i18n :refer [t]]
@@ -27,7 +26,7 @@
 (hsx/defc user-profile
   [login?]
   (let [username (user-handler/username)
-        email (user-handler/email)
+        address (user-handler/address)
         initial  (or (some-> username (subs 0 1) string/upper-case) "?")]
     [:div.pt-2
      (if-not login?
@@ -48,9 +47,7 @@
           initial]
          [:div.flex.flex-col.items-start
           [:span.text-base.font-semibold (or username (t :mobile.settings/account))]
-          (email-component/email-address {:email email
-                                          :class "text-xs"
-                                          :tooltip? false})]]])]))
+          [:span.text-xs.opacity-70.font-mono (some-> address user-handler/short-address)]]]])]))
 
 (defn theme-select
   [{:keys [value on-change]}]
@@ -228,7 +225,7 @@
 
 (hsx/defc page
   []
-  (let [login? (and (rfx/use-sub [:auth/id-token])
+  (let [login? (and (rfx/use-sub [:auth/access-token])
                     (user-handler/logged-in?))
         theme (rfx/use-sub [:ui/theme])
         system-theme? (rfx/use-sub [:ui/system-theme?])

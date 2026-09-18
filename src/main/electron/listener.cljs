@@ -12,7 +12,6 @@
             [frontend.handler.route :as route-handler]
             [frontend.handler.search :as search-handler]
             [frontend.handler.ui :as ui-handler]
-            [frontend.handler.user :as user]
             [frontend.persist-db :as persist-db]
             [frontend.state :as state]
             [frontend.ui :as ui]
@@ -88,10 +87,6 @@
                      (dom/remove-style! (dom/by-id "search-in-page-input") :visibility)
                      (dom/set-text! (dom/by-id "search-in-page-placeholder") "")
                      (ui/focus-element "search-in-page-input"))))
-
-  (safe-api-call "loginCallback"
-                 (fn [code]
-                   (user/login-callback code)))
 
   (safe-api-call "quickCapture"
                  (fn [args]

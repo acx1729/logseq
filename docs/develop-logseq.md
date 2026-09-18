@@ -24,6 +24,10 @@ pnpm watch
 
 Then open the browser <http://localhost:3001>.
 
+`pnpm watch` also builds the sign-in bundle (`static/js/wallet.js`, RainbowKit
+and wagmi compiled by Vite from `src/wallet`) and rebuilds it on change; run
+`pnpm wallet:build` to build it once and `pnpm wallet:test` for its tests.
+
 ### REPL setup
 
 #### VSCode + Calva
@@ -131,6 +135,26 @@ browser profile; Settings > Sync server changes it later. For a local server
 enter `http://127.0.0.1:8787`. For more about db sync, see
 [its readme](/deps/db-sync/README.md).
 
+### Signing in
+
+Sign-in is Sign-In with Ethereum: the app signs a message and the sync server
+mints a token for the address. The sign-in dialog offers two ways to sign:
+
+- **This device**: an identity the app creates and keeps for you (a recovery
+  phrase and its address). Nothing has to be installed; the same phrase gives
+  the same address in the CLI or on another device. Web and mobile keep it in
+  the browser profile (`wallet-identity` in localStorage); the desktop app
+  keeps it in `wallet-identity.json` under its user-data directory, encrypted
+  with the OS keychain when one is available.
+- **Other wallets**: any browser wallet, plus WalletConnect when the server
+  sets `DB_SYNC_WALLETCONNECT_PROJECT_ID`. The server's `/auth/config` also
+  lists the chains and RPC endpoints the wallet setup uses.
+
+The display name entered at sign-in is what other members see; the account
+panel in Settings changes it. Tokens are kept in the browser profile and,
+on the desktop, in `~/logseq/auth.json`, the file the CLI reads too, so
+`logseq login` and the desktop app share a session.
+
 ### DB sync Node adapter (self-hosted)
 
 Build and run the adapter with the development signing key (a PEM file the
@@ -150,7 +174,8 @@ pnpm build:node-adapter
 `127.0.0.1:3001` and the server's own host. Override any `DB_SYNC_*` variable
 before running it; the full list is in the readme.
 
-To obtain a token without a browser wallet, sign in with a throwaway key:
+To obtain a token without the app, sign in from the CLI (`logseq login`,
+which creates or reuses `~/logseq/identity.json`) or with a throwaway key:
 
 ```bash
 node scripts/siwe-login.mjs --server http://127.0.0.1:8787 --write-auth ~/logseq/auth.json

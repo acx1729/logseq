@@ -4,7 +4,7 @@
             ["emoji-mart" :as emoji-mart]
             ["react-intersection-observer" :as react-intersection-observer]
             ["react" :as react]
-            ["@sentry/react" :refer [ErrorBoundary]]
+            ["/frontend/error_boundary" :refer [ErrorBoundary]]
             ["react-textarea-autosize" :as TextareaAutosize]
             ["react-transition-group" :refer [CSSTransition]]
             ["react-virtuoso" :refer [Virtuoso VirtuosoGrid]]

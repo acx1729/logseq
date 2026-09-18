@@ -25,7 +25,7 @@
                      :else ws-url)]
           (string/replace base #"/sync/%s$" "")))))
 
-(defn id-token-expired?
+(defn token-expired?
   [token]
   (if-not (string? token)
     true
@@ -36,64 +36,25 @@
       (catch :default _
         true))))
 
-(defn oauth-token-url
-  [state]
-  (or (:auth/oauth-token-url state)
-      (when-let [domain (not-empty (:auth/oauth-domain state))]
-        (str "https://" domain "/oauth2/token"))))
-
-(defn <refresh-id&access-token
-  []
-  (let [state @worker-state/*state
-        refresh-token (:auth/refresh-token state)
-        token-url (oauth-token-url state)
-        oauth-client-id (:auth/oauth-client-id state)]
-    (when-not (seq refresh-token)
-      (throw (ex-info "worker auth refresh requires refresh token"
-                      {:code :missing-refresh-token})))
-    (when-not (seq token-url)
-      (throw (ex-info "worker auth refresh requires oauth token url"
-                      {:code :missing-oauth-token-url})))
-    (when-not (seq oauth-client-id)
-      (throw (ex-info "worker auth refresh requires oauth client id"
-                      {:code :missing-oauth-client-id})))
-    (let [form-data (js/URLSearchParams.)]
-      (.set form-data "grant_type" "refresh_token")
-      (.set form-data "client_id" oauth-client-id)
-      (.set form-data "refresh_token" refresh-token)
-      (p/let [resp (js/fetch token-url #js {:method "POST"
-                                            :headers #js {"content-type" "application/x-www-form-urlencoded"}
-                                            :body (.toString form-data)})
-              text (.text resp)
-              data (when (seq text)
-                     (js->clj (js/JSON.parse text) :keywordize-keys true))]
-        (if (.-ok resp)
-          {:id-token (:id_token data)
-           :access-token (:access_token data)}
-          (throw (ex-info "worker auth refresh failed"
-                          {:code :auth-refresh-failed
-                           :status (.-status resp)
-                           :token-url token-url
-                           :body data})))))))
-
 (defn <resolve-ws-token
+  "The token for a socket: the one in worker state, or a fresh one the UI
+   thread signs in for when it is expired. A CLI-owned runtime has no UI
+   thread and no identity, so it uses the token it was given."
   []
-  (let [token (sync-util/auth-token)
-        token-expired? (id-token-expired? token)]
-    (if (and (not (sync-util/cli-node-owner?)) token-expired?)
-      (p/let [{:keys [id-token access-token]} (<refresh-id&access-token)]
-        (when-not (seq id-token)
-          (throw (ex-info "worker auth refresh returned empty id-token"
-                          {:code :auth-refresh-empty-id-token})))
-        (worker-state/set-new-state!
-         (cond-> {:auth/id-token id-token}
-           (seq access-token) (assoc :auth/access-token access-token)))
-        id-token)
-      (p/resolved token))))
+  (let [token (sync-util/auth-token)]
+    (if (or (sync-util/cli-node-owner?) (not (token-expired? token)))
+      (p/resolved token)
+      (p/let [result (worker-state/<invoke-main-thread :thread-api/ensure-access-token)
+              fresh (:access-token result)]
+        (when-not (seq fresh)
+          (throw (ex-info "UI thread returned no access token"
+                          {:code :missing-access-token})))
+        (worker-state/set-new-state! {:auth/access-token fresh})
+        fresh))))
 
 (defn get-user-uuid
-  [id-token]
-  (some-> id-token
+  [token]
+  (some-> token
           worker-util/parse-jwt
           :sub))
 

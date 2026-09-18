@@ -149,7 +149,7 @@
 (defn- with-auth-headers
   [opts]
   (sync-auth/with-auth-headers
-   #(sync-auth/auth-headers (worker-state/get-id-token))
+   #(sync-auth/auth-headers (worker-state/get-access-token))
    opts))
 
 (defn- fetch-json

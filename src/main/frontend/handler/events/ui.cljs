@@ -37,10 +37,10 @@
             [frontend.handler.route :as route-handler]
             [frontend.handler.user :as user-handler]
             [frontend.mobile.util :as mobile-util]
-            [frontend.modules.instrumentation.sentry :as sentry-event]
             [frontend.state :as state]
             [frontend.util :as util]
             [frontend.util.entity :as entity]
+            [frontend.wallet :as wallet]
             [goog.dom :as gdom]
             [lambdaisland.glogi :as log]
             [logseq.common.config :as common-config]
@@ -427,7 +427,16 @@
   (state/set-state! :mobile/show-action-bar? false))
 
 (defevent! :user/logout [[_]]
-  (login/sign-out!))
+  (wallet/<sign-out!))
+
+(defevent! :user/session-expired [[_]]
+  (notification/show!
+   [:div.flex.flex-col.gap-2
+    [:span (t :wallet/sign-in-again)]
+    (shui/button {:size :sm
+                  :on-click (fn [] (state/pub-event! [:user/login]))}
+                 (t :ui/login))]
+   :warning false))
 
 (defevent! :user/login [[_]]
   (if (mobile-util/native-platform?)
@@ -493,28 +502,15 @@
         :else
         (route-handler/redirect-to-page! (:block/uuid asset))))))
 
-(defevent! :user/fetch-info-and-graphs [[_]]
+(defevent! :user/signed-in [[_]]
   (state/set-state! [:ui/loading? :login] false)
   (async/go
-    (let [result (async/<! (user-handler/<user-info user-handler/remoteapi))]
-      (cond
-        (instance? ExceptionInfo result)
-        nil
-        (map? result)
-        (do
-          (state/set-user-info! result)
-          (when-let [uid (user-handler/user-uuid)]
-            (sentry-event/set-user! uid))
-          (let [status (if (user-handler/alpha-or-beta-user?) :welcome :unavailable)
-                fetch-graphs? (and (user-handler/logged-in?)
-                                   (or (= status :welcome)
-                                       (user-handler/rtc-group?)))]
-            (when fetch-graphs?
-              (async/<! (p->c (rtc-handler/<get-remote-graphs)))
-              (repo-handler/refresh-repos!)
-              (when-let [current-repo (state/get-current-repo)]
-                (when (some #(= current-repo (:url %)) (state/get-rtc-graphs))
-                  (rtc-flows/trigger-rtc-start current-repo))))))))))
+    (when (user-handler/logged-in?)
+      (async/<! (p->c (rtc-handler/<get-remote-graphs)))
+      (repo-handler/refresh-repos!)
+      (when-let [current-repo (state/get-current-repo)]
+        (when (some #(= current-repo (:url %)) (state/get-rtc-graphs))
+          (rtc-flows/trigger-rtc-start current-repo))))))
 
 (defevent! :dialog/show-block [[_ block option]]
   (shui/dialog-open!

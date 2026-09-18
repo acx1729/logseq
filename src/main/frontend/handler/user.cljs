@@ -1,28 +1,16 @@
 (ns frontend.handler.user
-  "Provides user related handler fns like login and logout"
-  (:require-macros [frontend.handler.user])
-  (:require [cljs-http.client :as http]
-            [cljs-time.coerce :as tc]
-            [cljs-time.core :as t]
-            [cljs.core.async :as async :refer [<! go timeout]]
-            [clojure.set :as set]
-            [clojure.string :as string]
+  "The signed-in session: the token the sync server minted, its claims, the
+   silent renewal with the identity this device holds, and sign-out."
+  (:require [clojure.string :as string]
             [electron.ipc :as ipc]
             [frontend.common.thread-api :refer [def-thread-api]]
-            [frontend.config :as config]
-            [frontend.context.i18n :refer [t]]
-            [frontend.debug :as debug]
-            [frontend.handler.notification :as notification]
+            [frontend.common.user :as common-user]
             [frontend.state :as state]
             [frontend.util :as util]
-            [logseq.common.path :as path]
-            [goog.crypt :as crypt]
-            [goog.crypt.Hmac]
-            [goog.crypt.Sha256]
+            [frontend.wallet :as wallet]
             [goog.crypt.base64 :as base64]
+            [lambdaisland.glogi :as log]
             [promesa.core :as p]))
-
-;;; userinfo, token, login/logout, ...
 
 (defn parse-jwt
   "The claims of a JWT as a map; the signature is checked by the server."
@@ -41,324 +29,184 @@
     (catch :default _
       nil)))
 
-(defn- expired? [parsed-jwt]
-  (some->
-   (* 1000 (:exp parsed-jwt))
-   tc/from-long
-   (t/before? (t/now))))
+(defn- valid-claims?
+  [claims]
+  (and (map? claims)
+       (string? (:sub claims))
+       (string? (:username claims))
+       (number? (:exp claims))))
 
-(defn- almost-expired?
-  "return true when jwt will expire after 1h"
-  [parsed-jwt]
-  (some->
-   (* 1000 (:exp parsed-jwt))
-   tc/from-long
-   (t/before? (-> 1 t/hours t/from-now))))
+(defn- expires-at-ms
+  [claims]
+  (* 1000 (:exp claims)))
 
-(defn- almost-expired-or-expired?
-  [parsed-jwt]
-  (or (almost-expired? parsed-jwt)
-      (expired? parsed-jwt)))
+(defn- expired?
+  [claims]
+  (<= (expires-at-ms claims) (js/Date.now)))
 
-(defn email []
-  (some->
-   (state/get-auth-id-token)
-   parse-jwt
-   :email))
+(def ^:private renew-ahead-ms (* 24 60 60 1000))
 
-(defn username []
-  (some->
-   (state/get-auth-id-token)
-   parse-jwt
-   :username))
+(defn- renewal-due?
+  "True within a day of expiry, when a device with an identity signs in again."
+  [claims]
+  (<= (- (expires-at-ms claims) renew-ahead-ms) (js/Date.now)))
 
-(defn user-uuid []
-  (some->
-   (state/get-auth-id-token)
-   parse-jwt
-   :sub))
-
-(defn logged-in? []
-  (let [token (state/get-auth-refresh-token)]
-    (when (string? token)
-      (not (string/blank? token)))))
-
-(defn- set-token-to-localstorage!
-  ([id-token access-token]
-   (prn :debug "set-token-to-localstorage!")
-   (js/localStorage.setItem "id-token" id-token)
-   (js/localStorage.setItem "access-token" access-token))
-  ([id-token access-token refresh-token]
-   (prn :debug "set-token-to-localstorage!")
-   (js/localStorage.setItem "id-token" id-token)
-   (js/localStorage.setItem "access-token" access-token)
-   (js/localStorage.setItem "refresh-token" refresh-token)))
-
-(defn- auth-file-path
+(defn access-token
   []
-  (when-let [home-dir (state/get-state [:system/info :home-dir])]
-    (path/path-join home-dir "logseq" "auth.json")))
+  (state/get-auth-access-token))
 
-(defn- auth-file-payload
+(defn- claims
   []
-  {:id-token (state/get-auth-id-token)
-   :access-token (state/get-state :auth/access-token)
-   :refresh-token (state/get-auth-refresh-token)
-   :updated-at (.now js/Date)})
+  (let [parsed (some-> (access-token) parse-jwt-safe)]
+    (when (valid-claims? parsed)
+      parsed)))
 
-(defn- persist-auth-file!
+(defn address
+  "The signed-in wallet address in lowercase, or nil."
   []
+  (:sub (claims)))
+
+(defn username
+  "The display name the sync server has on file for this session."
+  []
+  (:username (claims)))
+
+(defn short-address
+  [address']
+  (str (subs address' 0 6) "…" (subs address' (- (count address') 4))))
+
+(defn logged-in?
+  []
+  (let [current (claims)]
+    (boolean (and current (not (expired? current))))))
+
+(defn user-uuid
+  "The uuid string this person is attributed by inside graphs, or nil."
+  []
+  (some-> (address) common-user/address->uuid))
+
+;;; the session token
+
+(def ^:private token-storage-key "access-token")
+
+(defn- persist-token!
+  "Keeps the desktop's token in ~/logseq/auth.json for the CLI."
+  [token]
   (when (util/electron?)
-    (when-let [auth-path (auth-file-path)]
-      (-> (ipc/ipc "writeFile"
-                   nil
-                   auth-path
-                   (js/JSON.stringify (clj->js (auth-file-payload)) nil 2))
-          (p/catch (fn [error]
-                     (js/console.warn :persist-auth-file-failed error)
-                     nil))))))
+    (-> (if token
+          (ipc/ipc :session/write-token token)
+          (ipc/ipc :session/remove-token))
+        (p/catch (fn [error]
+                   (log/warn :user/persist-token-failed {:error error}))))))
 
-(defn- clear-cognito-tokens!
-  "Clear tokens for cognito's localstorage, prefix is 'CognitoIdentityServiceProvider'"
+(defn- apply-token!
+  [token claims']
+  (state/set-auth-access-token token)
+  (js/localStorage.setItem token-storage-key token)
+  (persist-token! token)
+  (state/set-state! :auth/current-login-user claims'))
+
+(defn login-with-token!
+  "Installs a token the sync server minted and starts the signed-in flows."
+  [token]
+  (let [claims' (parse-jwt-safe token)]
+    (when-not (valid-claims? claims')
+      (throw (ex-info "token lacks the sub, username or exp claims" {:type :invalid-token})))
+    (when (expired? claims')
+      (throw (ex-info "token is already expired" {:type :expired-token})))
+    (apply-token! token claims')
+    (state/pub-event! [:user/signed-in])))
+
+(defn- clear-session!
   []
-  (let [prefix "CognitoIdentityServiceProvider."]
-    (doseq [key (js/Object.keys js/localStorage)]
-      (when (string/starts-with? key prefix)
-        (js/localStorage.removeItem key)))))
-
-(defn auto-fill-refresh-token-from-cognito!
-  []
-  (let [prefix "CognitoIdentityServiceProvider."
-        refresh-token-key (some #(when (string/starts-with? % prefix)
-                                   (when (string/ends-with? % "refreshToken")
-                                     %))
-                                (js/Object.keys js/localStorage))]
-    (when refresh-token-key
-      (let [refresh-token (js/localStorage.getItem refresh-token-key)]
-        (when (and refresh-token (not= refresh-token "undefined"))
-          (state/set-auth-refresh-token refresh-token)
-          (js/localStorage.setItem "refresh-token" refresh-token)
-          (persist-auth-file!))))))
-
-(defn- clear-tokens
-  ([]
-   (state/set-auth-id-token nil)
-   (state/set-auth-access-token nil)
-   (state/set-auth-refresh-token nil)
-   (set-token-to-localstorage! "" "" "")
-   (clear-cognito-tokens!)
-   (persist-auth-file!))
-  ([except-refresh-token?]
-   (state/set-auth-id-token nil)
-   (state/set-auth-access-token nil)
-   (when-not except-refresh-token?
-     (state/set-auth-refresh-token nil))
-   (if except-refresh-token?
-     (set-token-to-localstorage! "" "")
-     (set-token-to-localstorage! "" "" ""))
-   (persist-auth-file!)))
-
-(defn- set-tokens!
-  ([id-token access-token]
-   (state/set-auth-id-token id-token)
-   (state/set-auth-access-token access-token)
-   (set-token-to-localstorage! id-token access-token)
-   (persist-auth-file!)
-   (some->> (parse-jwt (state/get-auth-id-token))
-            (state/set-state! :auth/current-login-user)))
-  ([id-token access-token refresh-token]
-   (state/set-auth-id-token id-token)
-   (state/set-auth-access-token access-token)
-   (state/set-auth-refresh-token refresh-token)
-   (set-token-to-localstorage! id-token access-token refresh-token)
-   (persist-auth-file!)
-   (some->> (parse-jwt (state/get-auth-id-token))
-            (state/set-state! :auth/current-login-user))))
-
-(defn- <refresh-tokens
-  "return refreshed id-token, access-token"
-  [refresh-token]
-  (http/post (str "https://" config/OAUTH-DOMAIN "/oauth2/token")
-             {:form-params {:grant_type "refresh_token"
-                            :client_id config/COGNITO-CLIENT-ID
-                            :refresh_token refresh-token}}))
-
-(defn <refresh-id-token&access-token
-  "Refresh id-token and access-token"
-  []
-  (go
-    (when-let [refresh-token (state/get-auth-refresh-token)]
-      (let [resp (<! (<refresh-tokens refresh-token))]
-        (cond
-          (and (<= 400 (:status resp))
-               (> 500 (:status resp)))
-          ;; invalid refresh-token
-          (let [invalid-grant? (and (= 400 (:status resp))
-                                    (= (:error (:body resp)) "invalid_grant"))]
-            (prn :debug :refresh-token-failed
-                 :status (:status resp))
-            (when invalid-grant?
-              (clear-tokens)))
-
-          ;; e.g. api return 500, server internal error
-          ;; we shouldn't clear tokens if they aren't expired yet
-          ;; the `refresh-tokens-loop` will retry soon
-          (and (not (http/unexceptional-status? (:status resp)))
-               (not (-> (state/get-auth-id-token) parse-jwt expired?)))
-          (do
-            (prn :debug :refresh-token-failed
-                 :status (:status resp)
-                 :body (:body resp)
-                 :error-code (:error-code resp)
-                 :error-text (:error-text resp))
-            nil)                           ; do nothing
-
-          (not (http/unexceptional-status? (:status resp)))
-          (notification/show! (t :account/refresh-token-warning) :warning true)
-
-          :else                         ; ok
-          (when (and (:id_token (:body resp)) (:access_token (:body resp)))
-            (set-tokens! (:id_token (:body resp)) (:access_token (:body resp)))))))))
-
-(defn restore-tokens-from-localstorage
-  "Refresh id-token&access-token, pull latest repos, returns nil when tokens are not available."
-  []
-  (println "restore-tokens-from-localstorage")
-  (let [refresh-token (js/localStorage.getItem "refresh-token")
-        id-token (js/localStorage.getItem "id-token")
-        access-token (js/localStorage.getItem "access-token")
-        refresh-token-present?
-        (and (string? refresh-token) (not (string/blank? refresh-token)))
-        _ (when refresh-token-present?
-            (state/set-auth-refresh-token refresh-token))
-        restored-from-cache?
-        (boolean
-         (when (and refresh-token-present?
-                    (string? id-token) (not (string/blank? id-token))
-                    (string? access-token) (not (string/blank? access-token)))
-           (when-let [parsed (parse-jwt-safe id-token)]
-             (when-not (expired? parsed)
-               (set-tokens! id-token access-token refresh-token)
-               true))))
-        should-refresh?
-        (and refresh-token-present?
-             (or (not restored-from-cache?)
-                 (some-> (state/get-auth-id-token)
-                         parse-jwt-safe
-                         almost-expired?)))]
-    (when restored-from-cache?
-      ;; Publish login event immediately so sync can start without waiting token refresh request.
-      (state/pub-event! [:user/fetch-info-and-graphs]))
-    (when should-refresh?
-      (go
-        (<! (<refresh-id-token&access-token))
-        ;; If tokens were not restored from cache, this is the first chance to continue login flow.
-        (when (and (not restored-from-cache?) (user-uuid))
-          (state/pub-event! [:user/fetch-info-and-graphs]))))))
-
-(defn login-callback
-  [session]
-  (set-tokens!
-   (:jwtToken (:idToken session))
-   (:jwtToken (:accessToken session))
-   (:token (:refreshToken session)))
-  (auto-fill-refresh-token-from-cognito!)
-  (state/pub-event! [:user/fetch-info-and-graphs]))
-
-(defn ^:export login-with-username-password-e2e
-  [username' password client-id client-secret]
-  (let [text-encoder (new js/TextEncoder)
-        key          (.encode text-encoder client-secret)
-        hasher       (new crypt/Sha256)
-        hmacer       (new crypt/Hmac hasher key)
-        secret-hash  (base64/encodeByteArray (.getHmac hmacer (str username' client-id)))
-        payload      {"AuthParameters" {"USERNAME"    username',
-                                        "PASSWORD"    password,
-                                        "SECRET_HASH" secret-hash}
-                      "AuthFlow"       "USER_PASSWORD_AUTH",
-                      "ClientId"       client-id}
-        headers      {"X-Amz-Target" "AWSCognitoIdentityProviderService.InitiateAuth",
-                      "Content-Type" "application/x-amz-json-1.1"}]
-    (go
-      (let [resp (<! (http/post config/COGNITO-IDP {:headers headers
-                                                    :body    (js/JSON.stringify (clj->js payload))}))]
-        (assert (= 200 (:status resp)))
-        (let [body          (js->clj (js/JSON.parse (:body resp)))
-              access-token  (get-in body ["AuthenticationResult" "AccessToken"])
-              id-token      (get-in body ["AuthenticationResult" "IdToken"])
-              refresh-token (get-in body ["AuthenticationResult" "RefreshToken"])]
-          (set-tokens! id-token access-token refresh-token)
-          (state/pub-event! [:user/fetch-info-and-graphs])
-          {:id-token id-token :access-token access-token :refresh-token refresh-token})))))
-
-(defn logout []
-  (clear-tokens)
-  (.clear js/localStorage)
-  (state/clear-user-info!)
-  (state/pub-event! [:user/logout])
+  (state/set-auth-access-token nil)
+  (js/localStorage.removeItem token-storage-key)
+  (persist-token! nil)
   (state/set-state! :auth/current-login-user :logout))
 
-(defn upgrade []
-  (let [base-upgrade-url "https://logseqdemo.lemonsqueezy.com/checkout/buy/13e194b5-c927-41a8-af58-ed1a36d6000d"
-        user-uuid' (user-uuid)
-        url (cond-> base-upgrade-url
-              user-uuid' (str "?checkout[custom][user_uuid]=" (name user-uuid')))]
-    (println " ~~~ LEMON: " url " ~~~ ")
-    (js/window.open url)))
-  ; (js/window.open
-  ;   "https://logseqdemo.lemonsqueezy.com/checkout/buy/13e194b5-c927-41a8-af58-ed1a36d6000d"))
-
-(defn <ensure-id&access-token
+(defn logout
   []
-  (let [id-token (state/get-auth-id-token)]
-    (go
-      (when (or (nil? id-token)
-                (-> id-token parse-jwt almost-expired-or-expired?))
-        (debug/pprint (str "refresh tokens... " (tc/to-string (t/now))))
-        (<! (<refresh-id-token&access-token))
-        (when (or (nil? (state/get-auth-id-token))
-                  (-> (state/get-auth-id-token) parse-jwt expired?))
-          (ex-info "empty or expired token and refresh failed" {:anom :expired-token}))))))
+  (clear-session!)
+  (state/pub-event! [:user/logout]))
 
-(defn <ensure-id&access-token!
+(defn <renew-session!
+  "Signs in again with the identity this device holds and installs the token."
   []
-  (let [id-token (state/get-auth-id-token)]
-    (if (or (nil? id-token)
-            (-> id-token parse-jwt almost-expired-or-expired?))
-      (p/let [_ (<refresh-id-token&access-token)]
-        (prn (str "refresh tokens... " (tc/to-string (t/now))))
-        (when (or (nil? (state/get-auth-id-token))
-                  (-> (state/get-auth-id-token) parse-jwt expired?))
-          (throw (ex-info "empty or expired token and refresh failed" {:type :expired-token}))))
+  (p/let [{:keys [access-token]} (wallet/<renew-session! {:username (username)})]
+    (login-with-token! access-token)
+    access-token))
+
+(defn- <renew-if-possible!
+  "Renews when this device holds an identity; resolves to true when it did."
+  []
+  (p/let [identity? (wallet/<has-identity?)]
+    (if identity?
+      (p/let [_ (<renew-session!)]
+        true)
+      false)))
+
+(defn <ensure-token!
+  "Resolves once a token good for at least a day is installed, renewing it
+   first when this device holds an identity; rejects when no valid session
+   remains."
+  []
+  (let [current (claims)]
+    (cond
+      (nil? current)
+      (p/rejected (ex-info "not signed in" {:type :expired-token}))
+
+      (renewal-due? current)
+      (-> (<renew-if-possible!)
+          (p/catch (fn [error]
+                     (log/warn :user/renew-failed {:error error})
+                     false))
+          (p/then (fn [_]
+                    (when-not (logged-in?)
+                      (throw (ex-info "session expired" {:type :expired-token}))))))
+
+      :else
       (p/resolved nil))))
 
-(def-thread-api :thread-api/ensure-id&access-token
+(def-thread-api :thread-api/ensure-access-token
   []
-  (p/let [_ (<ensure-id&access-token!)]
-    {:id-token (state/get-auth-id-token)}))
+  (p/let [_ (<ensure-token!)]
+    {:access-token (access-token)}))
 
-;;; user groups
-
-(defn rtc-group?
+(defn restore-session!
+  "Installs the token kept in this browser profile. An expired token is
+   renewed when this device holds an identity; otherwise the person is asked
+   to sign in again."
   []
-  (boolean (or
-            config/dev?
-            (some? (config/sync-server-url))
-            (seq (set/intersection (state/user-groups) #{"team" "rtc_2025_07_10"})))))
+  (let [token (js/localStorage.getItem token-storage-key)
+        current (some-> token parse-jwt-safe)]
+    (cond
+      (nil? token)
+      nil
 
-(defn alpha-user?
-  []
-  (or config/dev?
-      (contains? (state/user-groups) "alpha-tester")))
+      (not (valid-claims? current))
+      (js/localStorage.removeItem token-storage-key)
 
-(defn beta-user?
-  []
-  (or config/dev?
-      (contains? (state/user-groups) "beta-tester")))
+      (expired? current)
+      (do
+        (js/localStorage.removeItem token-storage-key)
+        (-> (<renew-if-possible!)
+            (p/then (fn [renewed?]
+                      (when-not renewed?
+                        (state/pub-event! [:user/session-expired]))))
+            (p/catch (fn [error]
+                       (log/warn :user/renew-failed {:error error})
+                       (state/pub-event! [:user/session-expired])))))
 
-(defn alpha-or-beta-user?
-  []
-  (or (alpha-user?) (beta-user?)))
+      :else
+      (do
+        (apply-token! token current)
+        (state/pub-event! [:user/signed-in])
+        (when (renewal-due? current)
+          (p/catch (<renew-if-possible!)
+                   (fn [error]
+                     (log/warn :user/renew-failed {:error error}))))))))
+
+;;; graph membership
 
 (defn get-user-type
   [repo]
@@ -368,146 +216,3 @@
 (defn manager?
   [repo]
   (= (get-user-type repo) "manager"))
-
-;; TODO: Remove if still unused
-#_(defn member?
-    [repo]
-    (= (get-user-type repo) "member"))
-
-(defn <upload-user-avatar
-  [avatar-str]
-  (when-let [token (state/get-auth-id-token)]
-    (p/let [{:keys [status body] :as resp}
-            (http/post
-             (str "https://" config/API-DOMAIN "/logseq/get_presigned_user_avatar_put_url")
-             {:oauth-token token
-              :with-credentials? false})]
-      (when-not (http/unexceptional-status? status)
-        (throw (ex-info "failed to get presigned url" {:resp resp})))
-      (let [presigned-url (:presigned-url body)]
-        (p/let [{:keys [status]} (http/put presigned-url {:body avatar-str :with-credentials? false})]
-          (when-not (http/unexceptional-status? status)
-            (throw (ex-info "failed to upload avatar" {:resp resp}))))))))
-
-(defn- guard-ex
-  [x]
-  (when (instance? ExceptionInfo x) x))
-
-(defn- get-json-body [body]
-  (or (and (not (string? body)) body)
-      (when (string/blank? body) nil)
-      (try (js->clj (js/JSON.parse body) :keywordize-keys true)
-           (catch :default e
-             (prn :invalid-json body)
-             e))))
-
-(defn- get-resp-json-body [resp]
-  (-> resp (:body) (get-json-body)))
-
-(defn- <request-once [api-name body token]
-  (go
-    (let [resp (http/post (str "https://" config/API-DOMAIN "/file-sync/" api-name)
-                          {:oauth-token token
-                           :body (js/JSON.stringify (clj->js body))
-                           :with-credentials? false})]
-      {:resp (<! resp)
-       :api-name api-name
-       :body body})))
-
-(defn- <request*
-  "max retry count is 5.
-  *stop: volatile var, stop retry-request when it's true,
-          and return :stop"
-  ([api-name body token] (<request* api-name body token 0))
-  ([api-name body token retry-count]
-   (go
-     (let [resp (<! (<request-once api-name body token))]
-       (if (and
-            (= 401 (get-in resp [:resp :status]))
-            (= "Unauthorized" (:message (get-json-body (get-in resp [:resp :body])))))
-         (if (> retry-count 5)
-           (throw (js/Error. :file-sync-request))
-           (do (println "will retry after" (min 60000 (* 1000 retry-count)) "ms")
-               (<! (timeout (min 60000 (* 1000 retry-count))))
-               (<! (<request* api-name body token (inc retry-count)))))
-         (:resp resp))))))
-
-(defn <request [api-name & args]
-  (apply <request* api-name args))
-
-(defn storage-exceed-limit?
-  [exp]
-  (some->> (ex-data exp)
-           :err
-           ((juxt :status (comp :message :body)))
-           ((fn [[status msg]] (and (= 403 status) (= msg "storage-limit"))))))
-
-(defn graph-count-exceed-limit?
-  [exp]
-  (some->> (ex-data exp)
-           :err
-           ((juxt :status (comp :message :body)))
-           ((fn [[status msg]] (and (= 403 status) (= msg "graph-count-exceed-limit"))))))
-
-(defn- fire-file-sync-storage-exceed-limit-event!
-  [exp]
-  (when (storage-exceed-limit? exp)
-    (state/pub-event! [:rtc/storage-exceed-limit])
-    true))
-
-(defn- fire-file-sync-graph-count-exceed-limit-event!
-  [exp]
-  (when (graph-count-exceed-limit? exp)
-    (state/pub-event! [:rtc/graph-count-exceed-limit])
-    true))
-
-(defprotocol IToken
-  (<get-token [this]))
-
-(deftype RemoteAPI [*stopped?]
-  Object
-
-  (<request [this api-name body]
-    (go
-      (let [token-or-exp (<! (<get-token this))]
-        (or (guard-ex token-or-exp)
-            (let [resp (<! (<request api-name body token-or-exp *stopped?))]
-              (if (http/unexceptional-status? (:status resp))
-                (get-resp-json-body resp)
-                (let [exp (ex-info "request failed"
-                                   {:err          resp
-                                    :body         (:body resp)
-                                    :api-name     api-name
-                                    :request-body body})]
-                  (fire-file-sync-storage-exceed-limit-event! exp)
-                  (fire-file-sync-graph-count-exceed-limit-event! exp)
-                  exp)))))))
-
-  IToken
-  (<get-token [_this]
-    (frontend.handler.user/<wrap-ensure-id&access-token
-     (state/get-auth-id-token))))
-
-(defprotocol IRemoteAPI
-  (<user-info [this] "user info"))
-
-(extend-type RemoteAPI
-  IRemoteAPI
-  (<user-info [this]
-    (frontend.handler.user/<wrap-ensure-id&access-token
-     (<! (.<request this "user_info" {})))))
-
-(def remoteapi (->RemoteAPI nil))
-
-(comment
-  ;; We probably need this for some new features later
-  (defonce feature-matrix {:file-sync :beta})
-
-  (defn feature-available?
-    [feature]
-    (or config/dev?
-        (when (logged-in?)
-          (case (feature feature-matrix)
-            :beta (alpha-or-beta-user?)
-            :alpha (alpha-user?)
-            false)))))

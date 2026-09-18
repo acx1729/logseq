@@ -154,7 +154,7 @@
                             (ldb/write-transit-str encrypted-bytes))
                   total (payload-size payload)
                   _ (notify-asset-progress! repo asset-id :upload 0 total)
-                  headers (merge (sync-auth/auth-headers (worker-state/get-id-token))
+                  headers (merge (sync-auth/auth-headers (worker-state/get-access-token))
                                  {"x-amz-meta-checksum" checksum
                                   "x-amz-meta-type" asset-type})
                   ^js resp (js/fetch put-url
@@ -341,7 +341,7 @@
       (-> (p/let [aes-key (sync-crypt/<ensure-graph-aes-key graph-id)
                   asset-id (str asset-uuid)
                   get-url (sync-large-title/asset-url base graph-id asset-id asset-type)
-                  headers (sync-auth/auth-headers (worker-state/get-id-token))
+                  headers (sync-auth/auth-headers (worker-state/get-access-token))
                   request-opts (cond-> {:method "GET"}
                                  (seq headers) (assoc :headers headers))
                   ^js resp (js/fetch get-url

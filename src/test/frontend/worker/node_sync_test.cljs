@@ -15,20 +15,20 @@
                state-prev @worker-state/*state
                main-thread-prev @worker-state/*main-thread]
            (reset! worker-state/*db-sync-config {:ws-url "wss://example.com/sync/%s"})
-           (reset! worker-state/*state (assoc state-prev :auth/id-token "state-token"))
+           (reset! worker-state/*state (assoc state-prev :auth/access-token "state-token"))
            (reset! worker-state/*main-thread
                    (fn [qkw & _args]
-                     (when (= qkw :thread-api/ensure-id&access-token)
+                     (when (= qkw :thread-api/ensure-access-token)
                        (swap! refresh-calls inc))
-                     (p/resolved {:id-token "refreshed-token"})))
+                     (p/resolved {:access-token "refreshed-token"})))
            (with-redefs [platform/current (fn [] {:env {:runtime :node
                                                         :owner-source :cli}})
-                         db-sync/id-token-expired? (fn [_token] true)]
+                         db-sync/token-expired? (fn [_token] true)]
              (-> (#'db-sync/<resolve-ws-token)
                  (p/then (fn [token]
                            (is (= 0 @refresh-calls))
                            (is (= "state-token" token))
-                           (is (= "state-token" (worker-state/get-id-token)))
+                           (is (= "state-token" (worker-state/get-access-token)))
                            (reset! worker-state/*main-thread main-thread-prev)
                            (reset! worker-state/*db-sync-config config-prev)
                            (reset! worker-state/*state state-prev)
@@ -47,7 +47,7 @@
         ws-calls (atom [])
         attach-calls (atom [])]
     (set! js/WebSocket (js* "(function(_url){ this.readyState = 1; })"))
-    (reset! worker-state/*state (assoc state-prev :auth/id-token "token-123"))
+    (reset! worker-state/*state (assoc state-prev :auth/access-token "token-123"))
     (try
       (with-redefs [platform/current (fn [] platform-map)
                     platform/websocket-connect (fn [platform' url]

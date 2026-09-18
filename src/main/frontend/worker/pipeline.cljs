@@ -3,6 +3,7 @@
   (:require [clojure.set :as set]
             [clojure.string :as string]
             [datascript.core :as d]
+            [frontend.common.user :as common-user]
             [frontend.worker-common.util :as worker-util]
             [frontend.worker.commands :as commands]
             [frontend.worker.render-affected-keys :as render-affected-keys]
@@ -394,28 +395,28 @@
                          :logseq.property.comments/blocks (:db/id (:block/parent block))})))))))))
 
 (defn- gen-created-by-block
-  [decoded-id-token]
-  (let [user-uuid (:sub decoded-id-token)
-        user-name (:username decoded-id-token)
-        email (:email decoded-id-token)
+  "The page that stands for the signed-in person inside the graph: the same
+   uuid on every device, derived from the wallet address in the token."
+  [user-uuid claims]
+  (let [user-name (:username claims)
         now (common-util/time-ms)]
-    {:block/uuid (uuid user-uuid)
+    {:block/uuid user-uuid
      :block/name user-name
      :block/title user-name
      :block/tags :logseq.class/Page
      :block/created-at now
      :block/updated-at now
-     :logseq.property.user/name user-name
-     :logseq.property.user/email email}))
+     :logseq.property.user/name user-name}))
 
 (defn- add-created-by-ref-hook
   [db-before db-after tx-data tx-meta]
   (when (and (not (or (:undo? tx-meta) (:redo? tx-meta) (rtc-tx-or-download-graph? tx-meta)))
              (seq tx-data))
-    (when-let [decoded-id-token (some-> (worker-state/get-id-token) worker-util/parse-jwt)]
-      (let [created-by-ent (d/entity db-after [:block/uuid (uuid (:sub decoded-id-token))])
+    (when-let [claims (some-> (worker-state/get-access-token) worker-util/parse-jwt)]
+      (let [user-uuid (uuid (common-user/address->uuid (:sub claims)))
+            created-by-ent (d/entity db-after [:block/uuid user-uuid])
             created-by-block (when (nil? created-by-ent)
-                               (assoc (gen-created-by-block decoded-id-token) :db/id "created-by-id"))
+                               (assoc (gen-created-by-block user-uuid claims) :db/id "created-by-id"))
             created-by-id (or (:db/id created-by-ent) "created-by-id")
             add-created-by-tx-data
             (keep

@@ -537,18 +537,11 @@
         state-prev @worker-state/*state
         config-prev @worker-state/*db-sync-config]
     (try
-      (reset! worker-state/*state (assoc state-prev
-                                         :auth/id-token "existing-id-token"
-                                         :auth/oauth-token-url "https://existing.example.com/oauth2/token"
-                                         :auth/oauth-domain "existing.example.com"
-                                         :auth/oauth-client-id "existing-client-id"))
+      (reset! worker-state/*state (assoc state-prev :auth/access-token "existing-token"))
       (set-config! {:ws-url "wss://example.com/sync/%s"
                     :http-base "https://example.com"
                     :enabled? true
-                    :auth-token "id-token-from-config"
-                    :oauth-token-url "https://auth.example.com/oauth2/token"
-                    :oauth-domain "auth.example.com"
-                    :oauth-client-id "worker-client-id"})
+                    :auth-token "token-from-config"})
       (is (= {:ws-url "wss://example.com/sync/%s"
               :http-base "https://example.com"
               :enabled? true}
@@ -557,11 +550,7 @@
               :http-base "https://example.com"
               :enabled? true}
              (get-config)))
-      (is (= "existing-id-token" (:auth/id-token @worker-state/*state)))
-      (is (= "https://existing.example.com/oauth2/token"
-             (:auth/oauth-token-url @worker-state/*state)))
-      (is (= "existing.example.com" (:auth/oauth-domain @worker-state/*state)))
-      (is (= "existing-client-id" (:auth/oauth-client-id @worker-state/*state)))
+      (is (= "existing-token" (:auth/access-token @worker-state/*state)))
       (finally
         (reset! worker-state/*state state-prev)
         (reset! worker-state/*db-sync-config config-prev)))))
@@ -571,8 +560,7 @@
         config-prev @worker-state/*db-sync-config]
     (try
       (reset! worker-state/*db-sync-config {:ws-url "wss://example.com/sync/%s"
-                                            :auth-token "leaked-token"
-                                            :oauth-client-id "leaked-client"})
+                                            :auth-token "leaked-token"})
       (is (= {:ws-url "wss://example.com/sync/%s"}
              (get-config)))
       (finally

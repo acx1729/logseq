@@ -111,7 +111,6 @@
     {:client-id                             (str (random-uuid))
       :route-match                           nil
       :today                                 nil
-      :instrument/disabled?                  (storage/get "instrument-disabled")
       ;; TODO: how to detect the network reliably?
       ;; NOTE: prefer to use flows/network-online?
       :network/online?         true
@@ -315,13 +314,8 @@
 
       :reactive/query-dbs                    {}
 
-      ;; login, userinfo, token, ...
-      :auth/refresh-token                    (some-> (storage/get "refresh-token") str)
+      ;; the session token the sync server minted and its claims
       :auth/access-token                     nil
-      :auth/id-token                         nil
-      :auth/oauth-token-url                  nil
-      :auth/oauth-domain                     nil
-      :auth/oauth-client-id                  nil
       :auth/current-login-user               nil
 
       ;; graph-uuid -> ...
@@ -338,7 +332,6 @@
       :rtc/users-info                        {}
       :sync/block-conflicts                  {}
 
-      :user/info                             {:UserGroups (storage/get :user-groups)}
       :encryption/graph-parsing?             false
 
       :ui/loading?                           {}
@@ -741,10 +734,6 @@ should be done through this fn in order to get global config and config defaults
   []
   (and (document-mode?)
        (not (:shortcut/doc-mode-enter-for-new-block? (get-config)))))
-
-(defn user-groups
-  []
-  (set (get-state [:user/info :UserGroups])))
 
 ;; State mutation helpers
 ;; ======================
@@ -2010,23 +1999,13 @@ should be done through this fn in order to get global config and config defaults
   []
   (shui-dialog/get-last-dialog-id))
 
-(defn set-auth-id-token
-  [id-token]
-  (set-state! :auth/id-token id-token))
-
-(defn set-auth-refresh-token
-  [refresh-token]
-  (set-state! :auth/refresh-token refresh-token))
-
 (defn set-auth-access-token
   [access-token]
   (set-state! :auth/access-token access-token))
 
-(defn get-auth-id-token []
-  (get-state :auth/id-token))
-
-(defn get-auth-refresh-token []
-  (:auth/refresh-token (rfx/snapshot)))
+(defn get-auth-access-token
+  []
+  (get-state :auth/access-token))
 
 (defn http-proxy-enabled-or-val? []
   (when-let [{:keys [type protocol host port]} (get-state [:electron/user-cfgs :settings/agent])]
@@ -2048,18 +2027,6 @@ should be done through this fn in order to get global config and config defaults
       (when (apply not= (map :identity [inflated-file (get-current-pdf)]))
         (set-state! :pdf/current nil)
         (js/setTimeout #(settle-file!) 16)))))
-
-(defn set-user-info!
-  [info]
-  (when info
-    (set-state! :user/info info)
-    (let [groups (:UserGroups info)]
-      (when (seq groups)
-        (storage/set :user-groups groups)))))
-
-(defn clear-user-info!
-  []
-  (storage/remove :user-groups))
 
 (defn set-color-accent! [color]
   (swap-state! assoc :ui/radix-color color)

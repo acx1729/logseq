@@ -31,7 +31,7 @@
       (ws->http-base (config/db-sync-ws-url))))
 
 (defn- auth-headers []
-  (when-let [token (state/get-auth-id-token)]
+  (when-let [token (state/get-auth-access-token)]
     {"authorization" (str "Bearer " token)}))
 
 (defn- with-auth-headers [opts]
@@ -102,10 +102,6 @@
   (p/let [graph-uuid (state/<invoke-db-worker :thread-api/get-rtc-graph-uuid repo)]
     (some-> graph-uuid str)))
 
-(defn- <ensure-invite-auth!
-  []
-  (user-handler/<ensure-id&access-token!))
-
 (defn- should-start-rtc?
   [repo]
   (and (not (true? (:rtc/uploading? (state/get-state))))
@@ -169,22 +165,14 @@
 
 (defn- sync-app-state-payload
   []
-  (let [payload (select-keys (state/get-state) [:git/current-repo :config
-                                                 :auth/id-token :auth/access-token :auth/refresh-token
-                                                 :auth/oauth-token-url :auth/oauth-domain :auth/oauth-client-id
-                                                 :user/info])]
-    (cond-> (if (nil? (:git/current-repo payload))
-              (dissoc payload :git/current-repo)
-              payload)
-      (seq config/OAUTH-DOMAIN)
-      (assoc :auth/oauth-domain config/OAUTH-DOMAIN)
-
-      (seq config/COGNITO-CLIENT-ID)
-      (assoc :auth/oauth-client-id config/COGNITO-CLIENT-ID))))
+  (let [payload (select-keys (state/get-state) [:git/current-repo :config :auth/access-token])]
+    (if (nil? (:git/current-repo payload))
+      (dissoc payload :git/current-repo)
+      payload)))
 
 (defn- <sync-auth-state-to-db-worker!
   []
-  (p/let [_ (user-handler/<ensure-id&access-token!)
+  (p/let [_ (user-handler/<ensure-token!)
           payload (sync-app-state-payload)]
     (state/<invoke-db-worker :thread-api/sync-app-state payload)))
 
@@ -225,18 +213,16 @@
              (p/resolved cached-users)
 
              base
-             (p/let [_ (user-handler/<ensure-id&access-token!)
+             (p/let [_ (user-handler/<ensure-token!)
                      resp (fetch-json (str base "/graphs/" graph-uuid "/members")
                                       {:method "GET"}
                                       {:response-schema :graph-members/list})
                      members (:members resp)
-                     users (mapv (fn [{:keys [user-id role email username]}]
-                                   (let [name (or username email user-id)
-                                         user-type (some-> role keyword)]
-                                     (cond-> {:user/uuid user-id
-                                              :user/name name
-                                              :graph<->user/user-type user-type}
-                                       (string? email) (assoc :user/email email))))
+                     users (mapv (fn [{:keys [user-id role username]}]
+                                   ;; an invited address has no name until it signs in
+                                   {:user/uuid user-id
+                                    :user/name (or username (user-handler/short-address user-id))
+                                    :graph<->user/user-type (some-> role keyword)})
                                  members)]
                (state/set-state! :rtc/users-info users :nested-path repo)
                users)
@@ -255,7 +241,7 @@
   [graph-uuid _schema-version]
   (let [base (http-base)]
     (if (and graph-uuid base)
-      (p/let [_ (user-handler/<ensure-id&access-token!)]
+      (p/let [_ (user-handler/<ensure-token!)]
         (fetch-json (str base "/graphs/" graph-uuid)
                     {:method "DELETE"}
                     {:response-schema :graphs/delete}))
@@ -277,7 +263,7 @@
                   :message "Preparing graph snapshot download"}])
       (let [base (http-base)]
         (-> (if (and graph-uuid base)
-              (p/let [_ (user-handler/<ensure-id&access-token!)
+              (p/let [_ (user-handler/<ensure-token!)
                       graph (str config/db-version-prefix graph-name)
                       _ (<ensure-download-runtime-bound! graph)
                       _ (state/<invoke-db-worker :thread-api/db-sync-download-graph-by-id
@@ -302,7 +288,7 @@
     (if-not base
       (p/resolved [])
       (-> (p/let [_ (state/set-state! :rtc/loading-graphs? true)
-                  _ (user-handler/<ensure-id&access-token!)
+                  _ (user-handler/<ensure-token!)
                   resp (fetch-json (str base "/graphs")
                                    {:method "GET"}
                                    {:response-schema :graphs/list})
@@ -327,20 +313,22 @@
             (fn []
               (state/set-state! :rtc/loading-graphs? false)))))))
 
-(defn <rtc-invite-email
-  [graph-uuid email]
+(defn <rtc-invite-member
+  "Adds the wallet `address` (lowercase) to the graph's members; the person
+   sees the graph as soon as they sign in with that address."
+  [graph-uuid address]
   (let [base (http-base)
         graph-uuid (str graph-uuid)]
-    (if (and base (string? graph-uuid) (string? email))
+    (if (and base (string? graph-uuid) (string? address))
       (->
-       (p/let [_ (<ensure-invite-auth!)
+       (p/let [_ (user-handler/<ensure-token!)
                body (coerce-http-request :graph-members/create
-                                         {:email email
+                                         {:user-id address
                                           :role "member"})
                _ (when (nil? body)
                    (throw (ex-info "db-sync invalid invite body"
                                    {:graph-uuid graph-uuid
-                                    :email email})))
+                                    :address address})))
                _ (fetch-json (str base "/graphs/" graph-uuid "/members")
                              {:method "POST"
                               :headers {"content-type" "application/json"}
@@ -349,19 +337,15 @@
                _ (<rtc-get-users-info true)]
          (notification/show! (t :sync/invitation-sent) :success))
        (p/catch (fn [e]
-                  (if (= "user not found" (get-in (ex-data e) [:body :error]))
-                    (notification/show! (t :sync/user-doesnt-exist-yet) :warning)
-                    (do
-                      (notification/show! (t :sync/something-wrong) :error)
-                      (log/error :db-sync/invite-email-failed
-                                 {:error e
-                                  :graph-uuid graph-uuid
-                                  :email email}))))))
+                  (notification/show! (t :sync/something-wrong) :error)
+                  (log/error :db-sync/invite-member-failed
+                             {:error e
+                              :graph-uuid graph-uuid
+                              :address address}))))
       (p/rejected (ex-info "db-sync missing invite info"
                            {:type :db-sync/invalid-invite
                             :graph-uuid graph-uuid
-                            :email email
-                            :base base})))))
+                            :address address})))))
 
 (defn <rtc-remove-member!
   [graph-uuid member-id]
@@ -369,7 +353,7 @@
         graph-uuid (some-> graph-uuid str)
         member-id (some-> member-id str)]
     (if (and base (string? graph-uuid) (string? member-id))
-      (p/let [_ (user-handler/<ensure-id&access-token!)]
+      (p/let [_ (user-handler/<ensure-token!)]
         (fetch-json (str base "/graphs/" graph-uuid "/members/" member-id)
                     {:method "DELETE"}
                     {:response-schema :graph-members/delete}))
@@ -381,7 +365,7 @@
 
 (defn <rtc-leave-graph!
   [graph-uuid]
-  (if-let [member-id (user-handler/user-uuid)]
+  (if-let [member-id (user-handler/address)]
     (<rtc-remove-member! graph-uuid member-id)
     (p/rejected (ex-info "db-sync missing user id"
                          {:type :db-sync/invalid-member

@@ -1,8 +1,7 @@
 (ns frontend.handler.events.rtc
   "RTC events"
   (:require-macros [frontend.handler.events.macros :refer [defevent!]])
-  (:require [frontend.config :as config]
-            [frontend.context.i18n :refer [t]]
+  (:require [frontend.context.i18n :refer [t]]
             [frontend.flows :as flows]
             [frontend.handler.events :as events]
             [frontend.handler.notification :as notification]
@@ -23,22 +22,10 @@
     (cancel!))
   (let [state-atoms {:git/current-repo flows/current-repo
                      :config (flows/sub-atom [:config])
-                     :auth/id-token (flows/sub-atom [:auth/id-token])
-                     :auth/access-token (flows/sub-atom [:auth/access-token])
-                     :auth/refresh-token (flows/sub-atom [:auth/refresh-token])
-                     :auth/oauth-token-url (flows/sub-atom [:auth/oauth-token-url])
-                     :auth/oauth-domain (flows/sub-atom [:auth/oauth-domain])
-                     :auth/oauth-client-id (flows/sub-atom [:auth/oauth-client-id])
-                     :user/info (flows/sub-atom [:user/info])}
+                     :auth/access-token (flows/sub-atom [:auth/access-token])}
         <init-sync-done? (p/deferred)
         last-state (atom ::not-set)
-        app-state (fn []
-                    (cond-> (update-vals state-atoms deref)
-                      (seq config/OAUTH-DOMAIN)
-                      (assoc :auth/oauth-domain config/OAUTH-DOMAIN)
-
-                      (seq config/COGNITO-CLIENT-ID)
-                      (assoc :auth/oauth-client-id config/COGNITO-CLIENT-ID)))
+        app-state (fn [] (update-vals state-atoms deref))
         sync! (fn []
                 (let [m (app-state)]
                   (when-not (= @last-state m)

@@ -13,11 +13,11 @@
           graph-uuid "graph-1"
           worker-calls (atom [])
           uploads (atom [])
-          original-auth-id-token state/get-auth-id-token
+          original-auth-access-token state/get-auth-access-token
           original-get-file-content publish-handler/<get-file-content
           original-sha256 publish-handler/<sha256-hex
           original-upload-raw publish-handler/<upload-raw-asset!]
-      (set! state/get-auth-id-token (constantly "token"))
+      (set! state/get-auth-access-token (constantly "token"))
       (set! publish-handler/<get-file-content
             (fn [repo' path]
               (swap! worker-calls conj [:thread-api/get-file-content repo' path])
@@ -53,7 +53,7 @@
              (is false (str error))))
           (p/finally
            (fn []
-             (set! state/get-auth-id-token original-auth-id-token)
+             (set! state/get-auth-access-token original-auth-access-token)
              (set! publish-handler/<get-file-content original-get-file-content)
              (set! publish-handler/<sha256-hex original-sha256)
              (set! publish-handler/<upload-raw-asset! original-upload-raw)
@@ -65,7 +65,7 @@
           worker-calls (atom [])
           fetch-calls (atom [])
           previous-state (state/get-state)
-          original-auth-id-token state/get-auth-id-token
+          original-auth-access-token state/get-auth-access-token
           original-get-graph-uuid publish-handler/<get-graph-uuid
           original-sha256 publish-handler/<sha256-hex
           original-fetch js/fetch]
@@ -74,7 +74,7 @@
             (fn [url opts]
               (swap! fetch-calls conj [url opts])
               (p/resolved #js {:ok true})))
-      (set! state/get-auth-id-token (constantly nil))
+      (set! state/get-auth-access-token (constantly nil))
       (set! publish-handler/<get-graph-uuid
             (fn [repo']
               (swap! worker-calls conj [:thread-api/get-graph-uuid repo'])
@@ -101,7 +101,7 @@
           (p/finally
            (fn []
              (state/replace-state! previous-state)
-             (set! state/get-auth-id-token original-auth-id-token)
+             (set! state/get-auth-access-token original-auth-access-token)
              (set! publish-handler/<get-graph-uuid original-get-graph-uuid)
              (set! publish-handler/<sha256-hex original-sha256)
              (set! js/fetch original-fetch)
@@ -115,7 +115,7 @@
           removed-properties (atom [])
           notifications (atom [])
           previous-state (state/get-state)
-          original-auth-id-token state/get-auth-id-token
+          original-auth-access-token state/get-auth-access-token
           original-get-graph-uuid publish-handler/<get-graph-uuid
           original-remove-property property-handler/remove-block-property!
           original-notification-show notification/show!
@@ -125,7 +125,7 @@
             (fn [url opts]
               (swap! fetch-calls conj [url opts])
               (p/resolved #js {:ok true})))
-      (set! state/get-auth-id-token (constantly nil))
+      (set! state/get-auth-access-token (constantly nil))
       (set! publish-handler/<get-graph-uuid
             (fn [repo']
               (swap! worker-calls conj [:thread-api/get-graph-uuid repo'])
@@ -155,7 +155,7 @@
           (p/finally
            (fn []
              (state/replace-state! previous-state)
-             (set! state/get-auth-id-token original-auth-id-token)
+             (set! state/get-auth-access-token original-auth-access-token)
              (set! publish-handler/<get-graph-uuid original-get-graph-uuid)
              (set! property-handler/remove-block-property! original-remove-property)
              (set! notification/show! original-notification-show)

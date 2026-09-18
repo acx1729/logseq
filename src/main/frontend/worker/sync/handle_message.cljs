@@ -52,7 +52,7 @@
 
 (defn- get-user-uuid
   []
-  (sync-auth/get-user-uuid (worker-state/get-id-token)))
+  (sync-auth/get-user-uuid (worker-state/get-access-token)))
 
 (defn- send!
   [ws message]

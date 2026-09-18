@@ -171,16 +171,20 @@
 (def mac? (= "Mac OS X" (System/getProperty "os.name")))
 
 (defn login-test-account
-  [& {:keys [username password]
-      :or {username "e2etest"
-           password "Logseq-e2e"}}]
-  (w/eval-js "localStorage.setItem(\"login-enabled\",true);")
+  "Signs in through the sign-in dialog with the identity this browser
+   profile holds, creating one on first use. The app must point at a running
+   sync server (see the `sync-server-url` localStorage key)."
+  [& {:keys [display-name] :or {display-name "e2etest"}}]
   (w/click ".toolbar-dots-btn")
   (w/click "div:text(\"Login\")")
-  (input username)
-  (k/tab)
-  (input password)
-  (w/click ".cp__user-login button[type=\"submit\"]")
+  (w/wait-for "[data-wallet-action='create-identity'], [data-wallet-action='sign-in-device']")
+  (w/fill "#ls-wallet-display-name" display-name)
+  (if (w/visible? "[data-wallet-action='sign-in-device']")
+    (w/click "[data-wallet-action='sign-in-device']")
+    (do
+      (w/click "[data-wallet-action='create-identity']")
+      (w/click "[data-wallet-action='confirm-saved']")
+      (w/click "[data-wallet-action='continue-create']")))
   (w/wait-for-not-visible ".cp__user-login"))
 
 (defn goto-journals

@@ -158,6 +158,7 @@ jobs:
         run: |
           pnpm install --frozen-lockfile
           gulp build
+          pnpm wallet:build
           pnpm cljs:release-electron
           pnpm db-worker-node:bundle
           opam exec -- pnpm cli:release

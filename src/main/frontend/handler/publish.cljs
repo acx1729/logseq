@@ -248,7 +248,7 @@
   (let [asset-type (:logseq.property.asset/type asset)
         asset-uuid (some-> (:block/uuid asset) str)
         external-url (:logseq.property.asset/external-url asset)
-        token (state/get-auth-id-token)]
+        token (state/get-auth-access-token)]
     (if (or (not (string? asset-type)) (string/blank? asset-type) external-url (nil? asset-uuid))
       (p/resolved nil)
       (p/let [repo-dir (config/get-repo-dir repo)
@@ -299,7 +299,7 @@
 
 (defn- <upload-custom-publish-assets!
   [repo graph-uuid]
-  (let [token (state/get-auth-id-token)
+  (let [token (state/get-auth-access-token)
         asset-uuid "publish"]
     (p/let [results (p/all
                      (map (fn [{:keys [path type content-type meta-key asset-name]}]
@@ -322,7 +322,7 @@
 
 (defn- <post-publish!
   [payload {:keys [password custom-assets]}]
-  (let [token (state/get-auth-id-token)
+  (let [token (state/get-auth-access-token)
         headers (cond-> {"content-type" "application/transit+json"}
                   token (assoc "authorization" (str "Bearer " token)))]
     (p/let [page-password (some-> password string/trim)
@@ -416,7 +416,7 @@
 (defn unpublish-page!
   [page]
   (let [repo (state/get-current-repo)
-        token (state/get-auth-id-token)
+        token (state/get-auth-access-token)
         headers (cond-> {}
                   token (assoc "authorization" (str "Bearer " token)))]
     (p/let [graph-uuid (<get-graph-uuid repo)

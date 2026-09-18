@@ -36,8 +36,6 @@
         :closure-defines {lambdaisland.glogi.console/colorize "false"
                           lambdaisland.glogi.console/timestamp "true"
                           goog.debug.LOGGING_ENABLED true
-                          frontend.modules.instrumentation.sentry/SENTRY-DSN #shadow/env "LOGSEQ_SENTRY_DSN"
-                          frontend.modules.instrumentation.posthog/POSTHOG-TOKEN #shadow/env "LOGSEQ_POSTHOG_TOKEN"
                           frontend.config/ENABLE-PLUGINS #shadow/env ["ENABLE_PLUGINS" :as :bool :default true]}
 
         :devtools {:before-load frontend.core/stop          ;; before live-reloading any code call this function
@@ -116,8 +114,6 @@
            {lambdaisland.glogi.console/colorize "false"
             lambdaisland.glogi.console/timestamp "true"
             goog.debug.LOGGING_ENABLED true
-            frontend.modules.instrumentation.sentry/SENTRY-DSN #shadow/env "LOGSEQ_SENTRY_DSN"
-            frontend.modules.instrumentation.posthog/POSTHOG-TOKEN #shadow/env "LOGSEQ_POSTHOG_TOKEN"
             frontend.config/ENABLE-PLUGINS false}
 
            :devtools {:before-load mobile.core/stop!          ;; before live-reloading any code call this function

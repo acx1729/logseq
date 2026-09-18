@@ -43,8 +43,7 @@
            (mobile-util/native-platform?))
        (not remote?)
        (not rtc-graph?)
-       (user-handler/logged-in?)
-       (user-handler/rtc-group?)))
+       (user-handler/logged-in?)))
 
 (defn <invoke-db-worker
   [op & args]
@@ -231,7 +230,6 @@
 
            (when (and root
                       (user-handler/logged-in?)
-                      (user-handler/rtc-group?)
                       (not remote?)
                       (= url (state/get-current-repo)))
              (shui/dropdown-menu-item
@@ -290,7 +288,7 @@
 
 (hsx/defc repos-cp
   []
-  (let [login? (boolean (rfx/use-sub [:auth/id-token]))
+  (let [login? (boolean (rfx/use-sub [:auth/access-token]))
         repos (rfx/use-sub [:me :repos])
         repos (util/distinct-by :url repos)
         remotes (rfx/use-sub [:rtc/graphs])
@@ -310,7 +308,7 @@
         (group-by (fn [graph] (= "manager" (:graph<->user-user-type graph))) remote-graphs)]
     (hooks/use-effect!
      (fn []
-       (when (and login? (user-handler/rtc-group?))
+       (when login?
          (rtc-handler/<get-remote-graphs)))
      [login?])
     [:div#graphs
@@ -331,8 +329,7 @@
        (when (seq local-graphs)
          (repos-inner local-graphs))]
 
-      (when (and (user-handler/rtc-group?)
-                 (seq remote-graphs)
+      (when (and (seq remote-graphs)
                  login?)
         [:<>
          (when (seq own-graphs)
@@ -442,7 +439,7 @@
   [& {:keys [contentid footer?] :as opts
       :or {footer? true}}]
   (let [current-repo (rfx/use-sub [:git/current-repo])
-        login? (boolean (rfx/use-sub [:auth/id-token]))
+        login? (boolean (rfx/use-sub [:auth/access-token]))
         repos (rfx/use-sub [:me :repos])
         rtc-graphs (rfx/use-sub [:rtc/graphs])
         downloading-graph-id (rfx/use-sub [:rtc/downloading-graph-uuid])
@@ -608,7 +605,7 @@
       (string/includes? graph-name "/")))
 
 (hsx/defc new-db-graph-inner
-  [rtc-group?]
+  [logged-in?]
   (let [[creating-db? set-creating-db?] (hooks/use-state false)
         [cloud? set-cloud?] (hooks/use-state false)
         input-ref (hooks/create-ref)
@@ -648,7 +645,7 @@
        :placeholder (t :graph/name-placeholder)
        :on-key-down submit!
        :autoComplete "off"})
-     (when rtc-group?
+     (when logged-in?
        [:div.flex.flex-row.items-center.gap-1
         (shui/checkbox
          {:id "rtc-sync"
@@ -669,5 +666,4 @@
 
 (hsx/defc new-db-graph
   []
-  (let [rtc-group? (user-handler/rtc-group?)]
-    (new-db-graph-inner rtc-group?)))
+  (new-db-graph-inner (user-handler/logged-in?)))

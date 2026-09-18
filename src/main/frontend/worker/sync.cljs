@@ -102,7 +102,7 @@
 
 (def auth-token sync-util/auth-token)
 
-(def id-token-expired? sync-auth/id-token-expired?)
+(def token-expired? sync-auth/token-expired?)
 
 (def <resolve-ws-token sync-auth/<resolve-ws-token)
 

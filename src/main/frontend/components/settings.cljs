@@ -3,11 +3,10 @@
             [electron.ipc :as ipc]
             [frontend.colors :as colors]
             [frontend.components.assets :as assets]
-            [frontend.components.email :as email-component]
             [frontend.components.shortcut :as shortcut]
             [frontend.components.svg :as svg]
             [frontend.config :as config]
-            [frontend.context.i18n :refer [interpolate-rich-text-node locale-join-rich-text-node locale-format-date t]]
+            [frontend.context.i18n :refer [locale-join-rich-text-node locale-format-date t]]
             [frontend.date :as date]
             [frontend.dicts :as dicts]
             [frontend.handler.config :as config-handler]
@@ -19,7 +18,6 @@
             [frontend.handler.ui :as ui-handler]
             [frontend.handler.user :as user-handler]
             [frontend.mobile.util :as mobile-util]
-            [frontend.modules.instrumentation.core :as instrument]
             [frontend.modules.shortcut.data-helper :as shortcut-helper]
             [frontend.rfx :as rfx]
             [frontend.spec.storage :as storage-spec]
@@ -28,7 +26,7 @@
             [frontend.ui :as ui]
             [frontend.util :refer [classnames web-platform?] :as util]
             [frontend.version :as fv]
-            [goog.string :as gstring]
+            [frontend.wallet :as wallet]
             [lambdaisland.glogi :as log]
             [logseq.common.version :as build-version]
             [logseq.shui.hooks :as hooks]
@@ -546,14 +544,6 @@
             (let [value (not enable-all-pages-public?)]
               (config-handler/set-config! :publishing/all-pages-public? value)))))
 
-(defn usage-diagnostics-row [t instrument-disabled?]
-  (toggle "usage-diagnostics"
-          (t :settings.advanced/disable-sentry)
-          (not instrument-disabled?)
-          (fn [] (instrument/disable-instrument
-                  (not instrument-disabled?)))
-          [:span.text-sm.opacity-50 (t :settings.advanced/disable-sentry-desc)]))
-
 ;; (defn clear-cache-row [t]
 ;;   (row-with-button-action {:left-label   "Clear cache"
 ;;                            :button-label "Clear"
@@ -929,12 +919,10 @@
 
 (hsx/defc settings-advanced
   []
-  (let [instrument-disabled? (rfx/use-sub [:instrument/disabled?])
-        developer-mode? (rfx/use-sub [:ui/developer-mode?])
+  (let [developer-mode? (rfx/use-sub [:ui/developer-mode?])
         https-agent-opts (rfx/use-sub [:electron/user-cfgs :settings/agent])]
     [:div.panel-wrap.is-advanced
      (when (and (or util/mac? util/win32?) (util/electron?)) (app-auto-update-row t))
-     (usage-diagnostics-row t instrument-disabled?)
      (when-not (mobile-util/native-platform?) (developer-mode-row t developer-mode?))
      (sync-server-url-row)
      (publish-server-url-row)
@@ -947,196 +935,59 @@
      ;;  [:p "Clearing the cache will discard open graphs. You will lose unsaved changes."])
      ]))
 
-(hsx/defc settings-account-usage-description [pro-account? graph-usage]
-  (let [count-usage (count graph-usage)
-        count-limit (if pro-account? 10 1)
-        count-percent (js/Math.round (/ count-usage count-limit 0.01))
-        storage-usage (->> (map :used-gbs graph-usage)
-                           (reduce + 0))
-        storage-usage-formatted (cond
-                                  (zero? storage-usage) "0.0"
-                                  (< storage-usage 0.01) "< 0.01"
-                                  :else (gstring/format "%.2f" storage-usage))
-        ;; TODO: check logic on this. What are the rules around storage limits?
-        ;; do we, and should we be able to, give individual users more storage?
-        ;; should that be on a per graph or per user basis?
-        default-storage-limit (if pro-account? 10 0.05)
-        storage-limit (->> (range 0 count-limit)
-                           (map #(get-in graph-usage [% :limit-gbs] default-storage-limit))
-                           (reduce + 0))
-        storage-percent (/ storage-usage storage-limit 0.01)
-        storage-percent-formatted (gstring/format "%.1f" storage-percent)
-        count-percent-node [:strong.text-white (str count-percent "%")]
-        storage-percent-node [:strong.text-white (str storage-percent-formatted "%")]
-        synced-graphs-summary (interpolate-rich-text-node
-                               (t :settings.account/synced-graphs)
-                               [count-usage count-limit count-percent-node])
-        storage-usage-summary (interpolate-rich-text-node
-                               (t :settings.account/storage-usage)
-                               [storage-usage-formatted storage-limit storage-percent-node])]
-    [:div.text-sm
-     (if pro-account?
-       (locale-join-rich-text-node [synced-graphs-summary storage-usage-summary])
-       storage-usage-summary)]))
-     ; storage-usage-formatted "GB of " storage-limit "GB total storage"
-     ; [:strong.text-white " (" storage-percent-formatted "%)"]]))
-
-(hsx/defc settings-account-usage-graphs [_pro-account? graph-usage]
-  (when (< 0 (count graph-usage))
-    [:div.grid.gap-3 {:style {:grid-template-columns (str "repeat(" (count graph-usage) ", 1fr)")}}
-     (for [{:keys [name used-percent]} graph-usage
-           :let [color (if (<= 100 used-percent) "bg-red-500" "bg-blue-500")]]
-       [:div.rounded-full.w-full.h-2 {:class "bg-black/50"
-                                      :tooltip name}
-        [:div.rounded-full.h-2 {:class color
-                                :style {:width (str used-percent "%")
-                                        :min-width "0.5rem"
-                                        :max-width "100%"}}]])]))
-
-(hsx/defc ^:large-vars/cleanup-todo settings-account
+(hsx/defc wallet-account
+  "The account screen of the wallet bundle: address, display name, this
+   device's recovery phrase and the connected wallet."
   []
-  (let [graph-usage []
-        auth-refresh-token (rfx/use-sub [:auth/refresh-token])
-        logged-in? (and (string? auth-refresh-token)
-                        (not (string/blank? auth-refresh-token)))
-        user-info (rfx/use-sub [:user/info])
-        paid-user? (#{"active" "on_trial" "cancelled"} (:LemonStatus user-info))
-        gift-user? (some #{"pro"} (:UserGroups user-info))
-        pro-account? (or paid-user? gift-user?)
-        expiration-date (some-> user-info :LemonEndsAt date/parse-iso)
-        renewal-date (some-> user-info :LemonRenewsAt date/parse-iso)
-        has-subscribed? (some? (:LemonStatus user-info))]
-    [:div.panel-wrap.is-features.mb-8
-     [:div.mt-1.sm:mt-0.sm:col-span-2
-      (cond
-        logged-in?
-        [:div.grid.grid-cols-3.gap-8.pt-2
-         [:div (t :account/current-plan)]
-         [:div.col-span-2
-          [:div {:class "w-full bg-gray-500/10 rounded-lg p-4 flex flex-col gap-4"}
-           [:div.flex.gap-4.items-center
-            (if pro-account?
-              [:div.flex-1 (t :account/plan-pro)]
-              [:div.flex-1 (t :account/plan-free)])
-            (cond
-              has-subscribed?
-              (ui/button (t :account/manage-plan) {:class "p-1 h-8 justify-center"
-                                                   :disabled true
-                                                   :icon "upload"})
-                                         ; :on-click user-handler/upgrade})
-              (not pro-account?)
-              (ui/button (t :account/upgrade-plan) {:class "p-1 h-8 justify-center"
-                                                    :icon "upload"
-                                                    :on-click user-handler/upgrade})
-              :else nil)]
-           (settings-account-usage-graphs pro-account? graph-usage)
-           (settings-account-usage-description pro-account? graph-usage)]]
-         (when has-subscribed?
-           [:<>
-            [:div (t :account/billing)]
-            [:div.col-span-2.flex.flex-col.gap-4
-             (cond
-              ;; If there is no expiration date, print the renewal date
-               (and renewal-date (nil? expiration-date))
-               [:div
-                [:strong.font-semibold
-                 (t :account/billing-next-date-label
-                    (locale-format-date renewal-date))]]
-              ;; If the expiration date is in the future, word it as such
-               (< (js/Date.) expiration-date)
-               [:div
-                [:strong.font-semibold
-                 (t :account/billing-expires-on-label
-                    (locale-format-date expiration-date))]]
-              ;; Otherwise, ind
-               :else
-               [:div
-                [:strong.font-semibold
-                 (t :account/billing-expired-on-label
-                    (locale-format-date expiration-date))]])
+  (let [container-ref (hooks/use-ref nil)
+        address (user-handler/address)
+        username (user-handler/username)]
+    (hooks/use-effect!
+     (fn []
+       (let [*handle (atom nil)
+             *cancelled (atom false)]
+         (-> (wallet/<mount-account!
+              (hooks/deref container-ref)
+              {:session {:address address :username username}
+               :on-renamed (fn [^js result]
+                             (user-handler/login-with-token! (.-accessToken result))
+                             (notification/show! (t :wallet/renamed) :success))
+               :on-identity-removed (fn [] (user-handler/logout))
+               :on-error (fn [error]
+                           (log/warn :wallet/account-error {:error error}))})
+             (p/then (fn [^js handle]
+                       (if @*cancelled
+                         (.unmount handle)
+                         (reset! *handle handle))))
+             (p/catch (fn [error]
+                        (log/error :wallet/load-failed {:error error})
+                        (notification/show! (t :wallet/bundle-failed (str error)) :error))))
+         (fn []
+           (reset! *cancelled true)
+           (when-let [^js handle @*handle]
+             (.unmount handle)))))
+     [address])
+    [:div.ls-wallet-root {:ref container-ref}]))
 
-             [:div (ui/button (t :account/open-invoices) {:class "w-full h-8 p-1 justify-center"
-                                                          :disabled true
-                                                          :background "gray"
-                                                          :icon "receipt"})]]])
-         [:div (t :account/profile)]
-         [:div.col-span-2.grid.grid-cols-2.gap-4
-          [:div.flex.flex-col.gap-2.box-border {:class "basis-1/2"}
-           [:label.text-sm.font-semibold (t :account/first-name)]
-           [:input.rounded.border.px-2.py-1.box-border {:class "border-blue-500 bg-black/25 w-full"}]]
-          [:div.flex.flex-col.gap-2 {:class "basis-1/2"}
-           [:label.text-sm.font-semibold (t :account/last-name)]
-           [:input.rounded.border.px-2.py-1.box-border {:class "border-blue-500 bg-black/25 w-full"}]]
-          [:div.flex-1.flex.flex-col.gap-2.col-span-2
-           [:label.text-sm.font-semibold (t :account/username)]
-           [:div.rounded.border.px-2.py-1.box-border
-            {:class "border-blue-500 bg-black/25"}
-            (email-component/email-address {:email (user-handler/email)})]]]
-         [:div (t :account/authentication)]
-         [:div.col-span-2
-          [:div.grid.grid-cols-2.gap-4
-           [:div (ui/button (t :ui/logout) {:class "p-1 h-8 justify-center w-full"
-                                            :background "gray"
-                                            :icon "logout"
-                                            :on-click user-handler/logout})]
-           [:div (ui/button (t :account/reset-password) {:class "p-1 h-8 justify-center w-full"
-                                                         :disabled true
-                                                         :background "gray"
-                                                         :icon "key"
-                                                         :on-click user-handler/logout})]
-           [:div.col-span-2 (ui/button (t :account/delete-account) {:class "p-1 h-8 justify-center w-full"
-                                                                    :disabled true
-                                                                    :background "red"})]]]]
-
-        (not logged-in?)
-        [:div.grid.grid-cols-3.gap-8.pt-2
-         [:div (t :account/authentication)]
-         [:div.col-span-2.flex.flex-wrap.gap-4
-          [:div.w-full.text-white (t :account/benefits-desc)]
-          [:div.flex-1
-           (ui/button (t :account/sign-up) {:class "h-8 w-full text-center justify-center"
-                                            :on-click (fn []
-                                                        (state/close-settings!)
-                                                        (state/pub-event! [:user/login]))})]
-          [:div.flex-1
-           (ui/button (t :ui/login) {:icon "login"
-                                     :class "h-8 w-full text-center justify-center"
-                                     :background "gray"
-                                     :on-click (fn []
-                                                 (state/close-settings!)
-                                                 (state/pub-event! [:user/login]))})]]
-         [:div.col-span-3.flex.flex-col.gap-4 {:class "bg-black/20 p-4 rounded-lg"}
-          [:div.flex.w-full.items-center
-           [:div {:class "w-1/2 text-lg"}
-            (interpolate-rich-text-node
-             (t :account/discover-sync-desc)
-             [[:strong {:class "text-white/80"} "Logseq Sync"]])]
-           [:div {:class "w-1/2 bg-gradient-to-r from-white/10 to-transparent p-3 rounded-lg flex items-center gap-2 px-5 ml-5"}
-            [:div.w-3.h-3.rounded-full.bg-green-500]
-            (t :account/synced-status)]]
-          [:div.flex.w-full.gap-4
-           [:div {:class "w-1/2 bg-black/50 rounded-lg p-4 pt-10 relative flex flex-col gap-4"}
-            [:div.absolute.top-0.left-4.bg-gray-700.uppercase.px-2.py-1.rounded-b-lg.font-bold.text-xs (t :account/plan-free)]
-            [:div
-             [:strong.text-white.text-xl.font-normal "$0"]]
-            [:div.text-white.font-bold {:class "h-[2.5rem] "} (t :account/plan-free-summary)]
-            [:ul.text-xs.list-none.m-0.flex.flex-col.gap-0.5
-             [:li (t :account/unlimited-unsynced-graphs)]
-             [:li (t :account/free-plan-sync-limit)]
-             [:li (t :account/no-asset-syncing)]
-             [:li (t :account/core-features)]]]
-           [:div {:class "w-1/2 bg-black/50 rounded-lg p-4 pt-10 relative flex flex-col gap-4"}
-            [:div.absolute.top-0.left-4.bg-blue-700.uppercase.px-2.py-1.rounded-b-lg.font-bold.text-xs (t :account/plan-pro)]
-            [:div
-             [:strong.text-white.text-xl.font-normal "$10"]
-             [:span.text-xs.font-base {:class "ml-0.5"} " / " (t :account/month)]]
-            [:div.text-white.font-bold {:class "h-[2.5rem]"} (t :account/plan-pro-summary)]
-            [:ul.text-xs.list-none.m-0.flex.flex-col.gap-0.5
-             [:li (t :account/unlimited-unsynced-graphs)]
-             [:li (t :account/pro-plan-sync-limit)]
-             [:li (t :account/sync-assets-limit)]
-             [:li (t :account/early-access-alpha-beta)]
-             [:li (t :account/upcoming-cloud-features)]]]]]])]]))
+(hsx/defc settings-account
+  []
+  (let [_ (rfx/use-sub [:auth/current-login-user])
+        logged-in? (user-handler/logged-in?)]
+    [:div.panel-wrap.is-account.mb-8
+     (if logged-in?
+       [:div.flex.flex-col.gap-4
+        (wallet-account)
+        [:div (ui/button (t :ui/logout) {:class "p-1 h-8 justify-center"
+                                         :background "gray"
+                                         :icon "logout"
+                                         :on-click user-handler/logout})]]
+       [:div.flex.flex-col.gap-3
+        [:p.text-sm.opacity-70 (t :settings.features/login-prompt)]
+        [:div (ui/button (t :ui/login) {:class "p-1 h-8 justify-center"
+                                        :icon "login"
+                                        :on-click (fn []
+                                                    (state/close-settings!)
+                                                    (state/pub-event! [:user/login]))})]])]))
 
 (hsx/defc settings-features
   []
@@ -1177,7 +1028,7 @@
         [:hr]
         (if logged-in?
           [:div
-           (email-component/email-address {:email (user-handler/email)})
+           [:span.text-sm.font-mono (some-> (user-handler/address) user-handler/short-address)]
            [:p (ui/button (t :ui/logout) {:class "p-1"
                                           :icon "logout"
                                           :on-click user-handler/logout})]]
@@ -1189,7 +1040,7 @@
                                                  (state/pub-event! [:user/login]))})
            [:p.text-sm.opacity-50 (t :settings.features/login-prompt)]])])]))
 
-(def DEFAULT-ACTIVE-TAB-STATE (if config/ENABLE-SETTINGS-ACCOUNT-TAB [:account :account] [:general :general]))
+(def DEFAULT-ACTIVE-TAB-STATE [:general :general])
 
 (hsx/defc settings-effect
   [active]
@@ -1206,9 +1057,11 @@
 
   [:<>])
 
+(def ^:private wallet-address-re #"0x[0-9a-fA-F]{40}")
+
 (hsx/defc settings-rtc-members
   []
-  (let [[invite-email set-invite-email!] (hooks/use-state "")
+  (let [[invite-address set-invite-address!] (hooks/use-state "")
         [loading? set-loading!] (hooks/use-state true)
         [graph-uuid set-graph-uuid!] (hooks/use-state nil)
         current-repo (state/get-current-repo)
@@ -1216,9 +1069,10 @@
         users-info (rfx/use-sub [:rtc/users-info])
         users (get users-info current-repo)
         invite-user! (fn []
-                       (when-not (string/blank? invite-email)
-                         (when graph-uuid
-                           (rtc-handler/<rtc-invite-email graph-uuid invite-email))))]
+                       (when graph-uuid
+                         (if (re-matches wallet-address-re invite-address)
+                           (rtc-handler/<rtc-invite-member graph-uuid (string/lower-case invite-address))
+                           (notification/show! (t :collaboration/invalid-address) :warning))))]
     (hooks/use-effect!
      #(do
         (p/let [graph-uuid (state/<invoke-db-worker :thread-api/get-rtc-graph-uuid current-repo)
@@ -1238,7 +1092,6 @@
            (shui/skeleton {:class "h-4 w-32"})
            (shui/skeleton {:class "h-4 w-full"})])
         (for [{user-name :user/name
-               user-email :user/email
                user-uuid :user/uuid
                graph<->user-user-type :graph<->user/user-type} users]
           (let [member? (= :member graph<->user-user-type)
@@ -1246,9 +1099,9 @@
             [:div.flex.flex-row.items-center.gap-2
              {:key (str "user-" (or user-uuid user-name))}
              [:div user-name]
-             (when user-email
-               (email-component/email-address {:email user-email
-                                               :class "opacity-50 text-sm"}))
+             (when (and (string? user-uuid)
+                        (not= user-name (user-handler/short-address user-uuid)))
+               [:div.opacity-50.text-sm.font-mono (user-handler/short-address user-uuid)])
              (when graph<->user-user-type [:div.opacity-50.text-sm (name graph<->user-user-type)])
              (when can-remove?
                (shui/dropdown-menu
@@ -1277,8 +1130,9 @@
                   (t :collaboration/remove-access)))))])))]
      [:div.flex.flex-col.gap-4.mt-4
       (shui/input
-       {:placeholder   (t :collaboration/email-address)
-        :on-change     #(set-invite-email!
+       {:placeholder   (t :collaboration/wallet-address)
+        :spellCheck    false
+        :on-change     #(set-invite-address!
                          (string/trim (util/evalue %)))})
       (shui/button
        {:on-click invite-user!}
@@ -1354,8 +1208,7 @@
         [:h1.cp__settings-modal-title (t :nav/settings)]]
        [:ul.settings-menu
         (for [[label text icon]
-              [(when config/ENABLE-SETTINGS-ACCOUNT-TAB
-                 [:account (t :settings/account) (ui/icon "user-circle")])
+              [[:account (t :settings/account) (ui/icon "user-circle")]
                [:general (t :settings/general) (ui/icon "adjustments")]
                [:editor (t :settings/editor) (ui/icon "writing")]
                [:keymap (t :settings/keymap) (ui/icon "keyboard")]

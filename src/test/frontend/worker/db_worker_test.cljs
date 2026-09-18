@@ -729,7 +729,7 @@
 
 (defn- assert-db-sync-core-wrapper-results!
   [calls results request]
-  (let [{:keys [repo graph-id block asset email opts]} request]
+  (let [{:keys [repo graph-id block asset opts]} request]
     (is (= (:status results) ((get-thread-api :thread-api/db-sync-status) repo)))
     (is (= :started ((get-thread-api :thread-api/db-sync-start) repo)))
     (is (= :stopped ((get-thread-api :thread-api/db-sync-stop))))
@@ -764,7 +764,6 @@
                     :graph-id "remote-graph-id"
                     :block "block-1"
                     :asset "asset-1"
-                    :email "user@example.com"
                     :opts {:force? true}}]
        (with-db-sync-core-wrapper-redefs
         calls

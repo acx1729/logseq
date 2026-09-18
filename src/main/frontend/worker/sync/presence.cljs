@@ -59,14 +59,14 @@
        :last-error last-error})))
 
 (defn normalize-online-users
+  "Online members as {:user/uuid address :user/name display-name}; the
+   server sends both for every member."
   [users]
   (->> users
-       (keep (fn [{:keys [user-id email username name]}]
-               (when (string? user-id)
-                 (let [display-name (or username name user-id)]
-                   (cond-> {:user/uuid user-id
-                            :user/name display-name}
-                     (string? email) (assoc :user/email email))))))
+       (keep (fn [{:keys [user-id username]}]
+               (when (and (string? user-id) (string? username))
+                 {:user/uuid user-id
+                  :user/name username})))
        (common-util/distinct-by :user/uuid)
        (vec)))
 

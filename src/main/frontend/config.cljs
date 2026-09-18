@@ -5,7 +5,6 @@
             [frontend.state :as state]
             [frontend.util :as util]
             [goog.crypt.Md5]
-            [logseq.common.cognito-config :as cognito-config]
             [logseq.common.config :as common-config]
             [logseq.common.graph-dir :as common-graph-dir]
             [logseq.common.path :as path]
@@ -18,18 +17,6 @@
 
 (defonce publishing? common-config/PUBLISHING)
 
-;; this is a feature flag to enable the account tab
-;; when it launches (when pro plan launches) it should be removed
-(def ENABLE-SETTINGS-ACCOUNT-TAB false)
-
-(def COGNITO-CLIENT-ID cognito-config/COGNITO-CLIENT-ID)
-(def OAUTH-DOMAIN cognito-config/OAUTH-DOMAIN)
-
-(def API-DOMAIN "api.logseq.com")
-(def COGNITO-IDP "https://cognito-idp.us-east-1.amazonaws.com/")
-(def REGION "us-east-1")
-(def USER-POOL-ID "us-east-1_dtagLnju8")
-(def IDENTITY-POOL-ID "us-east-1:d6d3b034-1631-402b-b838-b44513e93ee0")
 (def default-publish-api-base "https://logseq.io")
 
 ;; Enable for local development

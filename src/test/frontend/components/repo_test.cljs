@@ -18,8 +18,7 @@
 
 (deftest local-uploadable-graph-allows-native-mobile-local-graph-without-root-test
   (with-redefs [mobile-util/native-platform? (constantly true)
-                user-handler/logged-in? (constantly true)
-                user-handler/rtc-group? (constantly true)]
+                user-handler/logged-in? (constantly true)]
     (is (true? (repo/local-uploadable-graph? {:url "logseq_db_mobile"})))))
 
 (deftest open-in-another-tab-action-is-web-only-for-existing-graphs-test

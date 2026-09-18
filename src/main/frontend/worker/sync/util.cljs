@@ -24,9 +24,7 @@
 
 (defn auth-token
   []
-  (let [state @worker-state/*state]
-    (or (:auth/id-token state)
-        (:auth/access-token state))))
+  (:auth/access-token @worker-state/*state))
 
 (defn get-graph-id
   [repo]

@@ -21,20 +21,14 @@
                        :config {}
                        :git/current-repo nil
 
-                       :auth/id-token nil
                        :auth/access-token nil
-                       :auth/refresh-token nil
-                       :auth/oauth-token-url nil
-                       :auth/oauth-domain nil
-                       :auth/oauth-client-id nil
 
-                       :user/info nil
                        ;; thread atoms, these atoms' value are syncing from ui-thread
                        :thread-atom/online-event (atom nil)
                        :thread-atom/search-input-idle-status (atom {})}))
 
 (def ^:private db-sync-config-auth-keys
-  #{:auth-token :oauth-token-url :oauth-domain :oauth-client-id})
+  #{:auth-token})
 
 (defn non-auth-db-sync-config
   [config]
@@ -107,9 +101,9 @@
   (swap! *state (fn [old-state]
                   (merge old-state new-state))))
 
-(defn get-id-token
+(defn get-access-token
   []
-  (:auth/id-token @*state))
+  (:auth/access-token @*state))
 
 (defn- node-runtime?
   []

@@ -3,8 +3,7 @@
   system can dispatch one of these events using state/pub-event!"
   (:refer-clojure :exclude [run!])
   (:require-macros [frontend.handler.events.macros :refer [defevent!]])
-  (:require ["@sentry/react" :as Sentry]
-            [cljs-bean.core :as bean]
+  (:require [cljs-bean.core :as bean]
             [cljs-time.core :as t]
             [clojure.string :as string]
             [frontend.commands :as commands]
@@ -34,7 +33,6 @@
             [frontend.handler.ui :as ui-handler]
             [frontend.handler.user :as user-handler]
             [frontend.mobile.util :as mobile-util]
-            [frontend.modules.instrumentation.posthog :as posthog]
             [frontend.modules.outliner.pipeline :as pipeline]
             [frontend.modules.outliner.ui :as ui-outliner-tx]
             [frontend.modules.shortcut.core :as st]
@@ -198,13 +196,6 @@
   ;; FIXME: an ugly implementation for redirecting to page on new window is restored
   (repo-handler/graph-ready! repo))
 
-(defevent! :instrument [[_ {:keys [type payload] :as opts}]]
-  (when-not (empty? (dissoc opts :type :payload))
-    (log/error :event :invalid-instrument-payload-keys
-               :message "instrument data-map should only contain [:type :payload]"
-               :payload opts))
-  (posthog/capture type payload))
-
 (defn- <current-graph-schema-version
   []
   (if @state/db-worker-ready?
@@ -221,9 +212,7 @@
                     :db-schema-version db-schema-version
                     :db-based true}
                    payload)]
-    (Sentry/captureException error
-                             (bean/->js {:tags payload
-                                         :extra extra}))))
+    (log/error :capture-error {:error error :tags payload :extra extra})))
 
 (defevent! :exec-plugin-cmd [[_ {:keys [pid cmd action]}]]
   (commands/exec-plugin-simple-command! pid cmd action))

@@ -133,7 +133,7 @@
    :reversed-datoms (reverse-tx-data db-before db-after tx-data)})
 
 (defn- auth-headers []
-  (sync-auth/auth-headers (worker-state/get-id-token)))
+  (sync-auth/auth-headers (worker-state/get-access-token)))
 
 (defn- send! [ws message]
   (sync-transport/send! sync-transport/coerce-ws-client-message ws message))
