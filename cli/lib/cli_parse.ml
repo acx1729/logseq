@@ -315,7 +315,8 @@ let allowed_options_for_path path =
   else if path2 path "debug" "pull" then
     option_names [| "id"; "uuid"; "ident" |]
   else if path1 path "doctor" then option_names [| "dev-script" |]
-  else if path1 path "login" then option_names [| "username"; "password" |]
+  else if path1 path "login" then
+    option_names [| "username"; "phrase"; "show-phrase" |]
   else if
     path1 path "logout" || path2 path "skill" "show" || path1 path "example"
   then Vec.empty
@@ -1072,19 +1073,20 @@ let parse ?stdin argv =
         if
           Vec.exists
             (fun (key, value) ->
-              (key = "username" || key = "password")
+              (key = "username" || key = "phrase")
               && (value = None || value = Some ""))
             options
         then
           Error
             (Error.invalid_options
-               "--username and --password require non-empty values")
+               "--username and --phrase require non-empty values")
         else
           let parsed =
             Auth_command.Parsed_login
               {
                 username = option_value "username" options;
-                password = option_value "password" options;
+                phrase = option_value "phrase" options;
+                show_phrase = option_present "show-phrase" options;
               }
           in
           Error.bind (Auth_command.validate_parsed parsed) (fun () ->

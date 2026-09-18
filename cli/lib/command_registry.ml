@@ -412,9 +412,10 @@ let options_for_command =
   | Login ->
       Vec.of_array
         [|
-          value "username" "username"
-            "Cognito sign-in identifier (requires --password)";
-          value "password" "password" "Account password (requires --username)";
+          value "username" "name" "Display name stored by the sync server";
+          value "phrase" "words"
+            "Import this machine's identity from its recovery phrase";
+          flag "show-phrase" "Print the recovery phrase of this machine's identity";
         |]
   | Server_list | Server_cleanup | Server_start | Server_stop | Server_restart
   | Sync_status | Sync_start | Sync_stop | Sync_upload | Sync_remote_graphs

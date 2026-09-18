@@ -1,64 +1,55 @@
 open Cli_effect.Infix
 
 type parsed =
-  | Parsed_login of { username : string option; password : string option }
+  | Parsed_login of {
+      username : string option;
+      phrase : string option;
+      show_phrase : bool;
+    }
   | Parsed_logout
 
-type action = Login of Auth_state.login_mode | Logout
+type action = Login of Auth_state.login_options | Logout
 
 let command_id = function
   | Parsed_login _ -> Command_id.Login
   | Parsed_logout -> Logout
 
-let login_mode username password =
-  match (username, password) with
-  | None, None -> Ok Auth_state.Browser_login
-  | Some username, Some password when username <> "" && password <> "" ->
-      Ok (Auth_state.Password_login { username; password })
-  | _ ->
-      Error
-        (Error.invalid_options
-           "login requires both --username and --password with non-empty values")
-
 let validate_parsed = function
-  | Parsed_login { username; password } ->
-      Error.map (fun _ -> ()) (login_mode username password)
-  | Parsed_logout -> Ok ()
+  | Parsed_login { username = Some name; _ } when String.trim name = "" ->
+      Error (Error.invalid_options "--username requires a non-empty value")
+  | Parsed_login { phrase = Some phrase; _ } when String.trim phrase = "" ->
+      Error (Error.invalid_options "--phrase requires a non-empty value")
+  | Parsed_login _ | Parsed_logout -> Ok ()
 
-let build ?registry:_ _ _ = function
-  | Parsed_login { username; password } ->
-      Error.map (fun mode -> Login mode) (login_mode username password)
-  | Parsed_logout -> Ok Logout
+let build ?registry:_ _ _ parsed =
+  Error.map
+    (fun () ->
+      match parsed with
+      | Parsed_login { username; phrase; show_phrase } ->
+          Login { Auth_state.requested_name = username; phrase; show_phrase }
+      | Parsed_logout -> Logout)
+    (validate_parsed parsed)
 
 let login_value (result : Auth_state.login_result) =
   let fields =
     Vec.of_array
       [|
         (Edn_util.keyword "auth-path", Edn_util.string result.auth_path);
+        (Edn_util.keyword "identity-path", Edn_util.string result.identity_path);
+        ( Edn_util.keyword "identity-created",
+          Edn_util.bool result.identity_created );
+        (Edn_util.keyword "address", Edn_util.string result.address);
+        (Edn_util.keyword "username", Edn_util.string result.stored_name);
+        ( Edn_util.keyword "expires-at",
+          Edn_util.int64 (Time.time_to_epoch_ms result.token_expires_at) );
         ( Edn_util.keyword "updated-at",
           Edn_util.int64 (Time.time_to_epoch_ms result.updated_at) );
       |]
   in
   let fields =
-    match result.details with
-    | Auth_state.Password_login_result -> fields
-    | Auth_state.Browser_login_result { authorize_url; opened } ->
-        Vec.append_array fields
-          [|
-            (Edn_util.keyword "authorize-url", Edn_util.string authorize_url);
-            (Edn_util.keyword "opened", Edn_util.bool opened);
-          |]
-  in
-  let fields =
-    match result.email with
-    | Some email ->
-        Vec.push_back fields (Edn_util.keyword "email", Edn_util.string email)
-    | None -> fields
-  in
-  let fields =
-    match result.sub with
-    | Some sub ->
-        Vec.push_back fields (Edn_util.keyword "sub", Edn_util.string sub)
+    match result.shown_phrase with
+    | Some phrase ->
+        Vec.push_back fields (Edn_util.keyword "phrase", Edn_util.string phrase)
     | None -> fields
   in
   Edn_util.map_vec fields
@@ -67,18 +58,14 @@ let logout_value (result : Auth_state.logout_result) =
   Edn_util.map_vec
     (Vec.of_array
        [|
-         (Edn_util.keyword "auth-path", Edn_util.string result.auth_path);
+         (Edn_util.keyword "auth-path", Edn_util.string result.logout_auth_path);
          (Edn_util.keyword "deleted", Edn_util.bool result.deleted);
-         (Edn_util.keyword "logout-url", Edn_util.string result.logout_url);
-         (Edn_util.keyword "opened", Edn_util.bool result.opened);
-         ( Edn_util.keyword "logout-completed",
-           Edn_util.bool result.logout_completed );
        |])
 
 let execute_with_mode action config mode =
   match action with
-  | Login login_mode -> (
-      Auth_state.login config login_mode >>= function
+  | Login options -> (
+      Auth_state.login config options >>= function
       | Ok result ->
           Cli_effect.pure
             (Cli_result.ok ~command:Command_id.Login mode

@@ -1,22 +1,6 @@
 val hostname : unit -> string
 val argv : unit -> string array
 
-type login_callback_request = { target : string option }
-type login_callback_response = { status : int; body : string }
-
-type login_callback_server_error =
-  | Login_callback_timeout
-  | Login_callback_server_start_failed of string
-  | Login_callback_server_aborted of string
-
-val login_callback_server :
-  host:string ->
-  port:int ->
-  timeout_span:float ->
-  on_listen:(unit -> (unit, string) result Cli_effect.t) ->
-  handle_request:(login_callback_request -> login_callback_response * 'result) ->
-  ('result, login_callback_server_error) result Cli_effect.t
-
 module Symbols : sig
   val ellipsis : string
   val linked_arrow : string

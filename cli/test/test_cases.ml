@@ -67,321 +67,6 @@ let spawn_cli_from entrypoint ?(env = [||]) args =
     (Array.append [| entrypoint |] args)
     [%obj { encoding = "utf8"; env = clone_env env }]
 
-let with_password_fixture scenario run =
-  let root = temp_dir "logseq-cli-password-" in
-  let config_path = Node.Path.join [| root; "cli.edn" |] in
-  let auth_path = Node.Path.join [| root; "private"; "auth.json" |] in
-  let calls_path = Node.Path.join [| root; "calls" |] in
-  let preload = Node.Path.join [| root; "fixture.cjs" |] in
-  mkdir_p (Filename.dirname auth_path);
-  write_file auth_path "existing-auth-file";
-  write_file config_path
-    (Printf.sprintf
-       "{:auth-path %S :oauth-client-id \"fixture-client\" :http-base \
-        \"https://sync.invalid\" :login-timeout-ms 1}"
-       auth_path);
-  write_file preload
-    ("const scenario = "
-    ^ Js.Json.stringify (Js.Json.string scenario)
-    ^ ";\n" ^ "const callsPath = "
-    ^ Js.Json.stringify (Js.Json.string calls_path)
-    ^ ";\n"
-    ^ {fixture|
-const fs = require('node:fs');
-const assert = require('node:assert/strict');
-const record = text => fs.appendFileSync(callsPath, text + '\n');
-const forbidden = () => { record('forbidden-side-effect'); throw Error('forbidden'); };
-require('node:http').createServer = forbidden;
-for (const name of ['spawn', 'spawnSync', 'exec', 'execSync']) {
-  require('node:child_process')[name] = forbidden;
-}
-globalThis.fetch = async (url, init) => {
-  record('request');
-  assert.equal(url, 'https://cognito-idp.us-east-1.amazonaws.com/');
-  assert.equal(init.method, 'POST');
-  const headers = new Headers(init.headers);
-  assert.equal(headers.get('Content-Type'), 'application/x-amz-json-1.1');
-  assert.equal(headers.get('X-Amz-Target'), 'AWSCognitoIdentityProviderService.InitiateAuth');
-  assert.deepEqual(JSON.parse(init.body), {
-    ClientId: 'fixture-client', AuthFlow: 'USER_PASSWORD_AUTH',
-    AuthParameters: {USERNAME: 'private-user', PASSWORD: '  secret-password  '}
-  });
-  record('validated');
-  if (scenario === 'transport') throw Error('secret-password secret-access secret-refresh');
-  if (scenario === 'timeout') return new Promise((resolve, reject) => {
-    init.signal.addEventListener('abort', () => reject(new DOMException('secret-password', 'AbortError')));
-  });
-  if (scenario === 'rejected') return new Response(JSON.stringify({
-    __type: 'NotAuthorizedException', message: 'secret-password secret-access'
-  }), {status: 400});
-  if (scenario === 'disabled') return new Response(JSON.stringify({
-    __type: 'InvalidParameterException', message: 'USER_PASSWORD_AUTH flow not enabled for this client secret-password'
-  }), {status: 400});
-  if (scenario === 'server-error') return new Response('secret-password secret-refresh', {status: 503});
-  if (scenario.startsWith('challenge:')) return Response.json({
-    ChallengeName: scenario.slice(10), Session: 'secret-session',
-    ChallengeParameters: {secret: 'secret-password'}
-  });
-  if (scenario === 'invalid-json') return new Response('secret-password {');
-  if (scenario === 'null') return Response.json(null);
-  if (scenario === 'empty') return Response.json({});
-  const claims = {sub: 'fixture-sub', email: 'fixture@example.com', exp: 4102444800};
-  if (scenario === 'missing-sub') delete claims.sub;
-  if (scenario === 'empty-sub') claims.sub = '';
-  if (scenario === 'wrong-sub') claims.sub = 123;
-  if (scenario === 'missing-exp') delete claims.exp;
-  if (scenario === 'string-exp') claims.exp = '4102444800';
-  if (scenario === 'fraction-exp') claims.exp = 4102444800.5;
-  if (scenario === 'expired') claims.exp = 1;
-  if (scenario === 'overflow-exp') claims.exp = 9007199254740991;
-  if (scenario === 'no-email') delete claims.email;
-  const jwt = 'header.' + Buffer.from(JSON.stringify(claims)).toString('base64url') + '.signature';
-  const result = {IdToken: jwt, AccessToken: 'secret-access', RefreshToken: 'secret-refresh'};
-  if (scenario === 'invalid-jwt') result.IdToken = 'secret-id-token';
-  if (scenario === 'invalid-payload') result.IdToken = 'header.c2VjcmV0LWlkLXRva2Vu.signature';
-  for (const field of ['IdToken', 'AccessToken', 'RefreshToken']) {
-    if (scenario === 'missing-' + field) delete result[field];
-    if (scenario === 'empty-' + field) result[field] = '';
-    if (scenario === 'wrong-' + field) result[field] = 42;
-  }
-  return Response.json({AuthenticationResult: result});
-};
-|fixture}
-    );
-  let spawn args =
-    spawn_sync Node.Process.argv.(0)
-      (Array.concat
-         [
-           [|
-             "--require";
-             preload;
-             entrypoint;
-             "--root-dir";
-             root;
-             "--config";
-             config_path;
-             "--timeout-ms";
-             "20";
-             "--verbose";
-           |];
-           args;
-         ])
-      [%obj { encoding = "utf8"; env = clone_env [||] }]
-  in
-  try
-    let result = run spawn auth_path calls_path in
-    remove_tree root;
-    result
-  with exn ->
-    remove_tree root;
-    raise exn
-
-let password_login_args output =
-  [|
-    "--output";
-    output;
-    "login";
-    "--username";
-    "private-user";
-    "--password";
-    "  secret-password  ";
-  |]
-
-let expect_no_login_secrets result =
-  Array.iter
-    (fun secret ->
-      expect_named_not_contains "stdout secret" result##stdout secret;
-      expect_named_not_contains "stderr secret" result##stderr secret)
-    [|
-      "private-user";
-      "secret-password";
-      "secret-access";
-      "secret-refresh";
-      "secret-session";
-      "secret-id-token";
-      "header.";
-    |]
-
-let () =
-  test "password login help exposes login-only options" (fun () ->
-      let login = run_cli [| "login"; "--help" |] in
-      expect_named_contains "username help" login "--username";
-      expect_named_contains "password help" login "--password";
-      Array.iter
-        (fun command ->
-          let help = run_cli [| command; "--help" |] in
-          expect_named_not_contains "login-only username" help "--username";
-          expect_named_not_contains "login-only password" help "--password")
-        [| "logout"; "graph" |]);
-
-  Array.iter
-    (fun output ->
-      test
-        ("password login persists private auth and safe " ^ output ^ " output")
-        (fun () ->
-          with_password_fixture "success" (fun spawn auth_path calls_path ->
-              let result = spawn (password_login_args output) in
-              expect_exit_zero "password login" result;
-              expect_no_login_secrets result;
-              expect_named_contains "identity" result##stdout
-                "fixture@example.com";
-              expect_named_contains "auth path" result##stdout auth_path;
-              expect_named_not_contains "no browser url" result##stdout
-                "authorize-url";
-              expect_named_not_contains "no opened placeholder" result##stdout
-                "opened";
-              expect_named_contains "one validated request"
-                (read_file calls_path) "request\nvalidated\n";
-              assert_true "one request"
-                (read_file calls_path = "request\nvalidated\n")
-                "unexpected external side effects";
-              let saved = read_file auth_path in
-              expect_named_contains "stored refresh token" saved
-                "secret-refresh";
-              expect_named_contains "stored id token" saved "header.";
-              expect_named_contains "stored expiry" saved "4102444800000";
-              expect_named_not_contains "no saved username" saved "private-user";
-              expect_named_not_contains "no saved password" saved
-                "secret-password";
-              let check =
-                spawn_sync Node.Process.argv.(0)
-                  [|
-                    "-e";
-                    "if ((require('fs').statSync(process.argv[1]).mode & \
-                     0o777) !== 0o600) process.exit(1)";
-                    auth_path;
-                  |]
-                  [%obj { encoding = "utf8"; env = clone_env [||] }]
-              in
-              expect_exit_zero "private permissions" check)))
-    [| "human"; "json"; "edn" |];
-
-  test "password login accepts ID claims without optional email" (fun () ->
-      with_password_fixture "no-email" (fun spawn _ _ ->
-          let result = spawn (password_login_args "json") in
-          expect_exit_zero "optional email" result;
-          expect_named_contains "subject" result##stdout "fixture-sub"));
-
-  Array.iter
-    (fun (scenario, code) ->
-      test
-        ("password login rejects " ^ scenario ^ " without replacing auth")
-        (fun () ->
-          with_password_fixture scenario (fun spawn auth_path calls_path ->
-              let result = spawn (password_login_args "json") in
-              expect_exit_non_zero scenario result;
-              expect_named_contains "structured error" result##stdout code;
-              expect_no_login_secrets result;
-              assert_true "auth preserved"
-                (read_file auth_path = "existing-auth-file")
-                "authentication failure replaced auth";
-              assert_true "one request"
-                (read_file calls_path = "request\nvalidated\n")
-                "unexpected external side effects")))
-    (Array.concat
-       [
-         [|
-           ("rejected", "password-auth-rejected");
-           ("disabled", "password-auth-disabled");
-           ("transport", "password-auth-failed");
-           ("timeout", "login-timeout");
-           ("server-error", "password-auth-failed");
-           ("challenge:SMS_MFA", "SMS_MFA");
-           ("challenge:NEW_PASSWORD_REQUIRED", "NEW_PASSWORD_REQUIRED");
-           ("challenge:SOFTWARE_TOKEN_MFA", "SOFTWARE_TOKEN_MFA");
-           ("challenge:secret-password", "invalid-auth-response");
-         |];
-         Array.map
-           (fun scenario -> (scenario, "invalid-auth-response"))
-           [|
-             "invalid-json";
-             "null";
-             "empty";
-             "invalid-jwt";
-             "invalid-payload";
-             "missing-sub";
-             "empty-sub";
-             "wrong-sub";
-             "missing-exp";
-             "string-exp";
-             "fraction-exp";
-             "expired";
-             "overflow-exp";
-             "missing-IdToken";
-             "empty-IdToken";
-             "wrong-IdToken";
-             "missing-AccessToken";
-             "empty-AccessToken";
-             "wrong-AccessToken";
-             "missing-RefreshToken";
-             "empty-RefreshToken";
-             "wrong-RefreshToken";
-           |];
-       ]);
-
-  test "password login invalid pairs fail before external side effects"
-    (fun () ->
-      Array.iter
-        (fun args ->
-          with_password_fixture "success" (fun spawn auth_path calls_path ->
-              let result = spawn args in
-              expect_exit_non_zero "invalid pair" result;
-              expect_named_contains "invalid options"
-                (result##stdout ^ result##stderr)
-                "invalid-options";
-              expect_no_login_secrets result;
-              assert_false "no network or browser"
-                (Cli_unix.file_exists calls_path)
-                "invalid credentials caused external side effects";
-              assert_true "auth preserved"
-                (read_file auth_path = "existing-auth-file")
-                "invalid pair replaced auth"))
-        [|
-          [|
-            "login";
-            "--username";
-            "private-user";
-            "--password";
-            "-secret-password";
-          |];
-          [|
-            "login";
-            "--username=private-user";
-            "--password=secret-password";
-            "private-user";
-          |];
-          [|
-            "login";
-            "--username";
-            "--username";
-            "private-user";
-            "--password";
-            "  secret-password  ";
-          |];
-          [|
-            "login";
-            "--username";
-            "private-user";
-            "--password";
-            "  secret-password  ";
-            "--password=";
-          |];
-          [| "login"; "--username"; "private-user" |];
-          [| "login"; "--password"; "secret-password" |];
-          [| "login"; "--username"; "--password" |];
-          [| "login"; "--username"; "private-user"; "--password" |];
-          [| "login"; "--username="; "--password=secret-password" |];
-          [| "login"; "--username=private-user"; "--password=" |];
-          [|
-            "logout";
-            "--username";
-            "private-user";
-            "--password";
-            "secret-password";
-          |];
-          [| "login"; "--user"; "private-user"; "--pass"; "secret-password" |];
-        |])
-
 let doctor_args root = [| "--root-dir"; root; "--output"; "json"; "doctor" |]
 
 let () =
@@ -701,168 +386,6 @@ let () =
       with exn ->
         remove_tree root;
         fail_test (Printexc.to_string exn));
-
-  test "login times out without socket fallback" (fun () ->
-      let root = temp_dir "logseq-cli-login-" in
-      let config_path = Node.Path.join [| root; "cli.edn" |] in
-      try
-        write_file config_path "{:open-browser false :login-timeout-ms 1}\n";
-        let result =
-          spawn_cli [| "--root-dir"; root; "--config"; config_path; "login" |]
-        in
-        remove_tree root;
-        ignore (expect_exit_non_zero "login without callback" result);
-        ignore
-          (expect_named_not_contains "login stdout socket fallback"
-             result##stdout "sockets are unavailable");
-        ignore
-          (expect_named_not_contains "login stderr socket fallback"
-             result##stderr "sockets are unavailable");
-        if
-          String.contains result##stdout 'l'
-          && Js.String.includes ~search:"login callback timed out"
-               result##stdout
-          || String.contains result##stderr 'l'
-             && Js.String.includes ~search:"login callback timed out"
-                  result##stderr
-        then pass
-        else
-          fail_test
-            (Printf.sprintf "expected login callback timeout\n%s\n%s"
-               result##stdout result##stderr)
-      with exn ->
-        remove_tree root;
-        fail_test (Printexc.to_string exn));
-
-  test_promise "login generates fresh PKCE challenge across CLI processes"
-    (fun () ->
-      let login_once base_url index =
-        let root =
-          temp_dir ("logseq-cli-login-pkce-" ^ string_of_int index ^ "-")
-        in
-        let config_path = Node.Path.join [| root; "cli.edn" |] in
-        let auth_path = Node.Path.join [| root; "auth.json" |] in
-        let state, encoded_state =
-          if index = 1 then (unicode_text [| 0x4e2d |], "%E4%B8%AD")
-          else ("fixed-test-state", "fixed-test-state")
-        in
-        let code = "auth-code-" ^ string_of_int index in
-        write_file config_path
-          ("{:open-browser false\n :login-timeout-ms 5000\n :auth-path "
-          ^ Printf.sprintf "%S" auth_path
-          ^ "\n :oauth-authorize-endpoint "
-          ^ Printf.sprintf "%S" (base_url ^ "/authorize")
-          ^ "\n :oauth-token-endpoint "
-          ^ Printf.sprintf "%S" (base_url ^ "/oauth2/token")
-          ^ "\n :oauth-client-id \"test-client\"\n :oauth-state \"" ^ state
-          ^ "\"}\n");
-        let login =
-          run_cli_p
-            [|
-              "--root-dir";
-              root;
-              "--config";
-              config_path;
-              "--output";
-              "json";
-              "login";
-            |]
-        in
-        let callback_url =
-          Printf.sprintf "http://localhost:8765/auth/callback?state=%s&code=%s"
-            encoded_state code
-        in
-        let* () = fetch_with_retry 100 callback_url in
-        let* result = login in
-        remove_tree root;
-        ignore (expect_cli_exit_zero "login pkce" result);
-        let authorize_url = json_data_string result.stdout "authorize-url" in
-        if query_param authorize_url "state" <> Some encoded_state then
-          fail_promise ("unexpected state: " ^ authorize_url)
-        else
-          match query_param authorize_url "code_challenge" with
-          | Some challenge -> Js.Promise.resolve challenge
-          | None -> fail_promise ("missing code_challenge: " ^ authorize_url)
-      in
-      with_server (oauth_server ()) (fun base_url ->
-          let* first = login_once base_url 1 in
-          let* second = login_once base_url 2 in
-          if first <> second then Js.Promise.resolve pass
-          else
-            fail_promise
-              ("expected fresh PKCE challenge across logins, got " ^ first)));
-
-  test_promise "logout deletes auth and exits without callback" (fun () ->
-      let root = temp_dir "logseq-cli-logout-flow-" in
-      let config_path = Node.Path.join [| root; "cli.edn" |] in
-      let auth_path = Node.Path.join [| root; "auth.json" |] in
-      let state = "fixed-logout-state" in
-      let write_auth () =
-        write_file auth_path
-          "{\"provider\":\"cognito\",\"refresh-token\":\"refresh-token\"}\n"
-      in
-      let logout_once base_url =
-        write_auth ();
-        write_file config_path
-          (Printf.sprintf
-             "{:open-browser false\n\
-             \ :logout-timeout-ms 5000\n\
-             \ :auth-path %S\n\
-             \ :http-base %S\n\
-             \ :oauth-client-id \"test-client\"\n\
-             \ :oauth-logout-state %S}\n"
-             auth_path base_url state);
-        let logout =
-          run_cli_p
-            [|
-              "--root-dir";
-              root;
-              "--config";
-              config_path;
-              "--output";
-              "json";
-              "logout";
-            |]
-        in
-        let* result = logout in
-        ignore (expect_cli_exit_zero "logout" result);
-        if Node.Fs.existsSync auth_path then
-          fail_promise "logout did not delete auth file"
-        else
-          let logout_url = json_data_string result.stdout "logout-url" in
-          let deleted = json_data_bool result.stdout "deleted" in
-          let opened = json_data_bool result.stdout "opened" in
-          let completed = json_data_bool result.stdout "logout-completed" in
-          if not deleted then
-            fail_promise ("expected deleted=true: " ^ result.stdout)
-          else if opened then
-            fail_promise ("expected opened=false: " ^ result.stdout)
-          else if not completed then
-            fail_promise ("expected logout-completed=true: " ^ result.stdout)
-          else if
-            not
-              (Js.String.startsWith ~prefix:(base_url ^ "/logout?") logout_url)
-          then fail_promise ("unexpected logout-url: " ^ logout_url)
-          else if query_param logout_url "client_id" <> Some "test-client" then
-            fail_promise ("missing client_id: " ^ logout_url)
-          else if query_param logout_url "response_type" <> Some "code" then
-            fail_promise ("missing response_type: " ^ logout_url)
-          else if
-            query_param logout_url "scope" <> Some "email%20openid%20phone"
-          then fail_promise ("missing scope: " ^ logout_url)
-          else if query_param logout_url "state" <> Some state then
-            fail_promise ("missing state: " ^ logout_url)
-          else
-            match query_param logout_url "redirect_uri" with
-            | Some uri
-              when uri = "http%3A%2F%2Flocalhost%3A8765%2Fauth%2Fcallback" ->
-                Js.Promise.resolve pass
-            | _ -> fail_promise ("missing redirect_uri: " ^ logout_url)
-      in
-      with_server (oauth_server ()) (fun base_url ->
-          let* result = logout_once base_url in
-          remove_tree root;
-          Js.Promise.resolve result));
 
   test "example without selector returns all examples as json" (fun () ->
       let result = spawn_cli [| "--output"; "json"; "example" |] in
@@ -3029,3 +2552,189 @@ let () =
                              !stdout !stderr))))))
 
 let registered = ()
+
+let login_cli root config_path args =
+  run_cli_p
+    (Array.append
+       [| "--root-dir"; root; "--config"; config_path; "--output"; "json" |]
+       args)
+
+let identity_config auth_path identity_path base_url =
+  Printf.sprintf "{:auth-path %S\n :identity-path %S\n :http-base %S}\n"
+    auth_path identity_path base_url
+
+let () =
+  test_promise
+    "login creates an identity, signs in without a browser and keeps the \
+     display name" (fun () ->
+      let root = temp_dir "logseq-cli-login-identity-" in
+      let config_path = Node.Path.join [| root; "cli.edn" |] in
+      let auth_path = Node.Path.join [| root; "private"; "auth.json" |] in
+      let identity_path =
+        Node.Path.join [| root; "private"; "identity.json" |]
+      in
+      let calls = ref Vec.empty in
+      let messages = ref Vec.empty in
+      with_server (sync_auth_server ~calls ~messages) (fun base_url ->
+          write_file config_path (identity_config auth_path identity_path base_url);
+          let* first =
+            login_cli root config_path [| "login"; "--username"; "Ada Lovelace" |]
+          in
+          ignore (expect_cli_exit_zero "first login" first);
+          let address = json_data_string first.stdout "address" in
+          let message =
+            Option.value (Vec.peek_front_opt !messages) ~default:""
+          in
+          let expected_head =
+            Printf.sprintf
+              "127.0.0.1 wants you to sign in with your Ethereum account:\n%s\n"
+              address
+          in
+          if not (json_data_bool first.stdout "identity-created") then
+            fail_promise ("expected a new identity: " ^ first.stdout)
+          else if json_data_string first.stdout "username" <> "Ada Lovelace"
+          then fail_promise ("unexpected username: " ^ first.stdout)
+          else if
+            Vec.to_list !calls
+            <> [ "GET /auth/config"; "GET /auth/nonce"; "POST /auth/siwe" ]
+          then fail_promise ("unexpected requests: " ^ Vec.string_concat ", " !calls)
+          else if not (Js.String.startsWith ~prefix:expected_head message) then
+            fail_promise ("unexpected message head: " ^ message)
+          else if
+            not
+              (Js.String.includes ~search:"\nURI: http://127.0.0.1\n" message
+              && Js.String.includes ~search:"\nChain ID: 1\n" message
+              && Js.String.includes
+                   ~search:"\nNonce: 0123456789abcdef0123456789abcdef\n"
+                   message)
+          then fail_promise ("unexpected message fields: " ^ message)
+          else if Js.String.includes ~search:"phrase" first.stdout then
+            fail_promise "phrase printed without --show-phrase"
+          else if
+            not (Js.String.includes ~search:"\"access-token\"" (read_file auth_path))
+          then fail_promise "auth file lacks access-token"
+          else if
+            not (Js.String.includes ~search:"\"phrase\"" (read_file identity_path))
+          then fail_promise "identity file lacks phrase"
+          else
+            let* second = login_cli root config_path [| "login"; "--show-phrase" |] in
+            ignore (expect_cli_exit_zero "second login" second);
+            let phrase = json_data_string second.stdout "phrase" in
+            if json_data_bool second.stdout "identity-created" then
+              fail_promise "expected the stored identity on the second login"
+            else if json_data_string second.stdout "address" <> address then
+              fail_promise "address changed between logins"
+            else if List.length (String.split_on_char ' ' phrase) <> 12 then
+              fail_promise ("expected a 12-word phrase: " ^ phrase)
+            else if json_data_string second.stdout "username" <> "Ada Lovelace"
+            then fail_promise ("expected the name on file: " ^ second.stdout)
+            else
+              let* logout = login_cli root config_path [| "logout" |] in
+              ignore (expect_cli_exit_zero "logout" logout);
+              if Node.Fs.existsSync auth_path then
+                fail_promise "logout kept the auth file"
+              else if not (Node.Fs.existsSync identity_path) then
+                fail_promise "logout removed the identity"
+              else if not (json_data_bool logout.stdout "deleted") then
+                fail_promise ("expected deleted=true: " ^ logout.stdout)
+              else
+                let* again = login_cli root config_path [| "logout" |] in
+                ignore (expect_cli_exit_zero "second logout" again);
+                remove_tree root;
+                if json_data_bool again.stdout "deleted" then
+                  fail_promise "expected deleted=false without an auth file"
+                else Js.Promise.resolve pass));
+
+  test_promise "login imports a recovery phrase and refuses a different one"
+    (fun () ->
+      let root = temp_dir "logseq-cli-login-phrase-" in
+      let config_path = Node.Path.join [| root; "cli.edn" |] in
+      let auth_path = Node.Path.join [| root; "auth.json" |] in
+      let identity_path = Node.Path.join [| root; "identity.json" |] in
+      let calls = ref Vec.empty in
+      let messages = ref Vec.empty in
+      let junk =
+        "test test test test test test test test test test test junk"
+      in
+      let junk_address = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266" in
+      let other =
+        "abandon abandon abandon abandon abandon abandon abandon abandon \
+         abandon abandon abandon about"
+      in
+      with_server (sync_auth_server ~calls ~messages) (fun base_url ->
+          write_file config_path (identity_config auth_path identity_path base_url);
+          let* invalid =
+            login_cli root config_path
+              [| "login"; "--phrase"; "not a recovery phrase" |]
+          in
+          if invalid.code = 0 then fail_promise "invalid phrase was accepted"
+          else if
+            not
+              (Js.String.includes ~search:"invalid-phrase"
+                 (invalid.stdout ^ invalid.stderr))
+          then
+            fail_promise
+              ("expected invalid-phrase: " ^ invalid.stdout ^ invalid.stderr)
+          else if not (Vec.is_empty !calls) then
+            fail_promise "invalid phrase reached the server"
+          else if Node.Fs.existsSync identity_path then
+            fail_promise "invalid phrase wrote an identity"
+          else
+            let* imported = login_cli root config_path [| "login"; "--phrase"; junk |] in
+            ignore (expect_cli_exit_zero "import phrase" imported);
+            if json_data_string imported.stdout "address" <> junk_address then
+              fail_promise
+                ("unexpected address for the test phrase: " ^ imported.stdout)
+            else if not (json_data_bool imported.stdout "identity-created") then
+              fail_promise "import did not create the identity"
+            else
+              let* same =
+                login_cli root config_path
+                  [| "login"; "--phrase"; String.uppercase_ascii junk |]
+              in
+              ignore (expect_cli_exit_zero "same phrase again" same);
+              if json_data_bool same.stdout "identity-created" then
+                fail_promise "re-importing the same phrase recreated the identity"
+              else
+                let* refused =
+                  login_cli root config_path [| "login"; "--phrase"; other |]
+                in
+                let identity_text = read_file identity_path in
+                remove_tree root;
+                if refused.code = 0 then
+                  fail_promise "a different phrase replaced the identity"
+                else if
+                  not
+                    (Js.String.includes ~search:"identity-exists"
+                       (refused.stdout ^ refused.stderr))
+                then
+                  fail_promise
+                    ("expected identity-exists: " ^ refused.stdout ^ refused.stderr)
+                else if not (Js.String.includes ~search:junk_address identity_text)
+                then fail_promise "identity file changed after a refused import"
+                else Js.Promise.resolve pass));
+
+  test "login help exposes the identity options" (fun () ->
+      let login = run_cli [| "login"; "--help" |] in
+      expect_named_contains "username help" login "--username";
+      expect_named_contains "phrase help" login "--phrase";
+      expect_named_contains "show-phrase help" login "--show-phrase";
+      expect_named_not_contains "no password option" login "--password";
+      let logout = run_cli [| "logout"; "--help" |] in
+      expect_named_not_contains "logout has no phrase option" logout "--phrase");
+
+  test "login refuses empty option values before touching the network" (fun () ->
+      Array.iter
+        (fun args ->
+          let result = spawn_cli args in
+          ignore (expect_exit_non_zero "empty option" result);
+          expect_named_contains "invalid options"
+            (result##stdout ^ result##stderr)
+            "invalid-options")
+        [|
+          [| "login"; "--username" |];
+          [| "login"; "--username="; "--show-phrase" |];
+          [| "login"; "--phrase" |];
+          [| "login"; "--phrase=" |];
+          [| "logout"; "--phrase"; "abandon" |];
+        |])

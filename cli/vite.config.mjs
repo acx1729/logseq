@@ -13,6 +13,15 @@ const nodeBuiltins = [
   ...builtinModules.map((moduleName) => `node:${moduleName}`),
 ];
 
+// Resolved from the published package's dependencies at runtime, never
+// bundled: viem carries native-free crypto but is large, and the sign-in
+// library must be the same build the sync server verifies with.
+const runtimeDependencies = ["@scure/bip39", "viem"];
+
+function isRuntimeDependency(id) {
+  return runtimeDependencies.some((name) => id === name || id.startsWith(`${name}/`));
+}
+
 const gitCwd = process.env.DUNE_SOURCEROOT ?? process.cwd();
 
 function gitOutput(args) {
@@ -51,7 +60,8 @@ export default defineConfig({
     sourcemap: false,
     target: "node22",
     rollupOptions: {
-      external: (id) => id.startsWith("node:") || nodeBuiltins.includes(id),
+      external: (id) =>
+        id.startsWith("node:") || nodeBuiltins.includes(id) || isRuntimeDependency(id),
       output: {
         exports: "auto",
         codeSplitting: false,

@@ -255,19 +255,6 @@ let jwt_token payload =
   base64url "{\"alg\":\"none\",\"typ\":\"JWT\"}"
   ^ "." ^ base64url payload ^ ".signature"
 
-let id_token ?(sub = "user-1") ?(email = "user@example.com") () =
-  jwt_token
-    (Printf.sprintf "{\"sub\":%s,\"email\":%s,\"exp\":4102444800}"
-       (Js.Json.stringify (Js.Json.string sub))
-       (Js.Json.stringify (Js.Json.string email)))
-
-let token_response ?(sub = "user-1") ?(email = "user@example.com") () =
-  let object_ = Js.Dict.empty () in
-  Js.Dict.set object_ "id_token" (Js.Json.string (id_token ~sub ~email ()));
-  Js.Dict.set object_ "access_token" (Js.Json.string "access-token");
-  Js.Dict.set object_ "refresh_token" (Js.Json.string "refresh-token");
-  Js.Json.stringify (Js.Json.object_ object_)
-
 let query_param url key =
   let parts = Vec.split_on_char '?' url in
   if Vec.length parts = 2 then
@@ -339,39 +326,6 @@ let invoke_server response_for_body =
             try write_json res 200 (json_response (response_for_body !body))
             with exn ->
               write_json res 400 (error_response (Printexc.to_string exn))))
-
-let oauth_server () =
-  create_server (fun[@u] req res ->
-      let body = ref "" in
-      req_set_encoding req "utf8";
-      req_on_data req "data" (fun[@u] chunk -> body := !body ^ chunk);
-      req_on_end req "end" (fun[@u] () ->
-          ignore !body;
-          if req_method req <> "POST" || req_url req <> "/oauth2/token" then
-            write_json res 404 (error_response "not found")
-          else write_json res 200 (token_response ())))
-
-let rec fetch_with_retry attempts url =
-  let request =
-    Fetch.fetch url
-    |> Js.Promise.then_ (fun response ->
-        let status = Fetch.Response.status response in
-        if status >= 200 && status <= 299 then Js.Promise.resolve ()
-        else Js.Promise.reject (Failure ("HTTP " ^ string_of_int status)))
-  in
-  Js.Promise.catch
-    (fun error ->
-      if attempts <= 0 then
-        let message =
-          Option.value
-            (promise_error_message error)
-            ~default:"callback request failed"
-        in
-        Js.Promise.reject (Failure message)
-      else
-        sleep_ms 50
-        |> Js.Promise.then_ (fun () -> fetch_with_retry (attempts - 1) url))
-    request
 
 let with_server server run =
   Js.Promise.make (fun ~resolve ~reject ->
@@ -542,3 +496,62 @@ let expect_exit_non_zero = assert_exit_non_zero
 let expect_cli_exit_zero = assert_cli_exit_zero
 let expect_line_starts_with = assert_line_starts_with
 let expect_created_at_column_aligned = assert_created_at_column_aligned
+
+(* A fake sync server exposing the sign-in routes the CLI uses: it accepts
+   any signature, mints unsigned session tokens for the message's address and
+   keeps display names the way the real server does. *)
+let sync_auth_server ~calls ~messages =
+  let names = Hashtbl.create 4 in
+  create_server (fun[@u] req res ->
+      let body = ref "" in
+      req_set_encoding req "utf8";
+      req_on_data req "data" (fun[@u] chunk -> body := !body ^ chunk);
+      req_on_end req "end" (fun[@u] () ->
+          calls := Vec.push_back !calls (req_method req ^ " " ^ req_url req);
+          match (req_method req, req_url req) with
+          | "GET", "/auth/config" ->
+              write_json res 200
+                "{\"issuer\":\"http://127.0.0.1\",\"app_name\":\"Logseq\",\"statement\":\"Sign in to Logseq\",\"chain_ids\":[1],\"rpc_urls\":{},\"walletconnect_project_id\":null}"
+          | "GET", "/auth/nonce" ->
+              write_json res 200
+                "{\"nonce\":\"0123456789abcdef0123456789abcdef\",\"expires_at\":4102444800}"
+          | "POST", "/auth/siwe" -> (
+              match Json_util.object_of_json_string !body with
+              | None -> write_json res 400 (error_response "invalid body")
+              | Some object_ -> (
+                  let message =
+                    Option.value (Json_util.string_field object_ "message")
+                      ~default:""
+                  in
+                  let signature =
+                    Option.value (Json_util.string_field object_ "signature")
+                      ~default:""
+                  in
+                  messages := Vec.push_back !messages message;
+                  match String.split_on_char '\n' message with
+                  | _ :: address :: _
+                    when Js.String.startsWith ~prefix:"0x" signature
+                         && String.length address = 42 ->
+                      let sub = String.lowercase_ascii address in
+                      let name =
+                        match Json_util.string_field object_ "username" with
+                        | Some name ->
+                            Hashtbl.replace names sub name;
+                            name
+                        | None ->
+                            Option.value (Hashtbl.find_opt names sub)
+                              ~default:"anon"
+                      in
+                      let token =
+                        jwt_token
+                          (Printf.sprintf
+                             "{\"sub\":%s,\"username\":%s,\"exp\":4102444800}"
+                             (Js.Json.stringify (Js.Json.string sub))
+                             (Js.Json.stringify (Js.Json.string name)))
+                      in
+                      write_json res 200
+                        (Printf.sprintf
+                           "{\"token_type\":\"Bearer\",\"access_token\":%s,\"expires_in\":2592000,\"scope\":\"logseq/read logseq/write\"}"
+                           (Js.Json.stringify (Js.Json.string token)))
+                  | _ -> write_json res 400 (error_response "invalid message")))
+          | _ -> write_json res 404 (error_response "not found")))

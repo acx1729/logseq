@@ -232,9 +232,9 @@ let stage_count stage summaries =
   |> Vec.find_map (fun (summary : Profile_types.stage_summary) ->
       if summary.stage = stage then Some summary.count else None)
 
-let config ?graph ?repo ?output_format ?auth_path ?id_token ?access_token
-    ?refresh_token ?raw_file_config ?list_title_max_display_width
-    ?(root_dir = "/tmp/logseq-cli-test") () =
+let config ?graph ?repo ?output_format ?auth_path ?identity_path
+    ?access_token ?raw_file_config ?list_title_max_display_width ?ws_url
+    ?http_base ?(root_dir = "/tmp/logseq-cli-test") () =
   let defaults = Cli_config.defaults () in
   {
     Cli_config.graph = Option.map Cli_primitive.create_graph graph;
@@ -242,25 +242,22 @@ let config ?graph ?repo ?output_format ?auth_path ?id_token ?access_token
     root_dir;
     config_path = Node.Path.join [| root_dir; "cli.edn" |];
     timeout_span = defaults.timeout_span;
-    login_timeout_span = defaults.login_timeout_span;
-    logout_timeout_span = defaults.logout_timeout_span;
     list_title_max_display_width =
       Option.value list_title_max_display_width
         ~default:defaults.list_title_max_display_width;
     output_format;
     verbose = false;
     profile = false;
-    ws_url = Some defaults.ws_url;
-    http_base = Some defaults.http_base;
+    ws_url;
+    http_base;
     auth_path;
-    id_token;
+    identity_path;
     access_token;
-    refresh_token;
     base_url = None;
     owner_source = Cli_primitive.Cli;
     project_dir = None;
-    raw_file_config;
     graph_generation = None;
+    raw_file_config;
     profile_session = None;
   }
 
@@ -366,19 +363,22 @@ let invoke_arg_string body index =
     ("invoke arg " ^ string_of_int index)
     (Edn_util.as_string (Vec.nth args index))
 
-let sample_auth ?(id_token = Some "id-token-1")
-    ?(access_token = Some "access-token-1")
-    ?(refresh_token = Some "refresh-token-1") ?expires_at
-    ?(updated_at = 1_735_686_000_000L) ?(sub = Some "user-123")
-    ?(email = Some "user@example.com") () : Auth_state.auth_data =
+let session_token ?(sub = "0x000000000000000000000000000000000000dead")
+    ?(username = "Ada") ?(exp = 4102444800L) () =
+  jwt_token
+    (Printf.sprintf "{\"sub\":%s,\"username\":%s,\"exp\":%Ld}"
+       (Js.Json.stringify (Js.Json.string sub))
+       (Js.Json.stringify (Js.Json.string username))
+       exp)
+
+let sample_auth ?(sub = "0x000000000000000000000000000000000000dead")
+    ?(username = "Ada") ?(exp = 4102444800L)
+    ?(updated_at = 1_735_686_000_000L) () : Auth_state.auth_data =
   {
-    provider = "cognito";
-    id_token;
-    access_token;
-    refresh_token;
-    expires_at;
+    access_token = session_token ~sub ~username ~exp ();
     sub;
-    email;
+    username;
+    expires_at = Time.time_of_epoch_ms (Int64.mul exp 1000L);
     updated_at = Time.time_of_epoch_ms updated_at;
   }
 
@@ -715,7 +715,7 @@ let () =
       expect_equal "default auth path" expected
         (Auth_state.default_auth_path ()));
 
-  test "CLI parity auth file write read and delete round-trips token data"
+  test "CLI parity auth file write read and delete round-trips the token"
     (fun () ->
       let root = temp_dir "logseq-cli-parity-auth-" in
       let auth_path =
@@ -730,24 +730,21 @@ let () =
           (expect_ok "write auth"
              (effect_result "write auth"
                 (Auth_state.write_auth_file config auth)));
-        expect_bool "auth dir exists" true
-          (Node.Fs.existsSync (Node.Path.dirname auth_path));
         expect_bool "auth file exists" true (Node.Fs.existsSync auth_path);
+        expect_named_not_contains "auth file holds the token only"
+          (read_file auth_path) "username";
         let stored =
           expect_some "stored auth"
             (expect_ok "read auth"
                (effect_result "read auth" (Auth_state.read_auth_file config)))
         in
-        expect_equal "provider" auth.provider stored.provider;
-        expect_equal "id-token" "id-token-1"
-          (expect_some "id-token" stored.id_token);
-        expect_equal "access-token" "access-token-1"
-          (expect_some "access-token" stored.access_token);
-        expect_equal "refresh-token" "refresh-token-1"
-          (expect_some "refresh-token" stored.refresh_token);
-        expect_equal "sub" "user-123" (expect_some "sub" stored.sub);
-        expect_equal "email" "user@example.com"
-          (expect_some "email" stored.email);
+        expect_equal "access-token" auth.access_token stored.access_token;
+        expect_equal "sub" auth.sub stored.sub;
+        expect_equal "username" "Ada" stored.username;
+        expect_int64 "expires-at" 4_102_444_800_000L
+          (Time.time_to_epoch_ms stored.expires_at);
+        expect_int64 "updated-at" 1_735_686_000_000L
+          (Time.time_to_epoch_ms stored.updated_at);
         ignore
           (expect_ok "delete auth"
              (effect_result "delete auth" (Auth_state.delete_auth_file config)));
@@ -761,12 +758,16 @@ let () =
         remove_tree root;
         fail_test (Printexc.to_string exn));
 
-  test
-    "CLI parity auth read returns none when missing and errors on invalid json"
+  test "CLI parity auth read returns none when missing and rejects bad files"
     (fun () ->
       let root = temp_dir "logseq-cli-parity-auth-read-" in
       let missing_path = Node.Path.join [| root; "missing"; "auth.json" |] in
       let invalid_path = Node.Path.join [| root; "auth.json" |] in
+      let read () =
+        effect_result "read auth"
+          (Auth_state.read_auth_file
+             (config ~root_dir:root ~auth_path:invalid_path ()))
+      in
       try
         let missing =
           expect_ok "missing auth"
@@ -776,261 +777,128 @@ let () =
         in
         expect_none "missing auth none" missing;
         write_file invalid_path "{\"provider\":";
-        expect_error_code "invalid auth json" "invalid-auth-file"
-          (effect_result "read invalid auth"
-             (Auth_state.read_auth_file
-                (config ~root_dir:root ~auth_path:invalid_path ())));
+        expect_error_code "invalid auth json" "invalid-auth-file" (read ());
+        write_file invalid_path "{\"id-token\":\"legacy\"}";
+        expect_error_code "auth without token" "invalid-auth-file" (read ());
+        write_file invalid_path "{\"access-token\":\"not-a-jwt\"}";
+        expect_error_code "auth with opaque token" "invalid-auth-token" (read ());
+        write_file invalid_path
+          (Printf.sprintf "{\"access-token\":%s}"
+             (Js.Json.stringify
+                (Js.Json.string
+                   (jwt_token "{\"sub\":\"0xabc\",\"exp\":4102444800}"))));
+        expect_error_code "auth without username claim" "invalid-auth-token"
+          (read ());
         remove_tree root
       with exn ->
         remove_tree root;
         fail_test (Printexc.to_string exn));
 
-  test "CLI parity auth expired status uses expires-at strictly" (fun () ->
-      expect_bool "missing expires-at is expired" true
-        (Auth_state.expired_auth (sample_auth ()));
-      expect_bool "past expires-at is expired" true
-        (Auth_state.expired_auth
-           (sample_auth ~expires_at:(Time.time_of_epoch_ms 0L) ()));
-      expect_bool "future expires-at is not expired" false
-        (Auth_state.expired_auth (sample_auth ~expires_at:Time.max_time ())));
-
-  test "CLI parity auth read supports old underscore fields and config tokens"
+  test "CLI parity auth expired status uses the token expiry strictly"
     (fun () ->
-      let root = temp_dir "logseq-cli-parity-auth-compat-" in
-      let auth_path = Node.Path.join [| root; "auth.json" |] in
+      expect_bool "past exp is expired" true
+        (Auth_state.expired_auth (sample_auth ~exp:1L ()));
+      expect_bool "future exp is not expired" false
+        (Auth_state.expired_auth (sample_auth ())));
+
+  test "CLI parity identity file round-trips and rejects tampering" (fun () ->
+      let root = temp_dir "logseq-cli-parity-identity-" in
+      let identity_path = Node.Path.join [| root; "keys"; "identity.json" |] in
+      let config = config ~root_dir:root ~identity_path () in
+      let junk =
+        "test test test test test test test test test test test junk"
+      in
       try
-        write_file auth_path
-          "{\"id_token\":\"id-token-2\",\"access_token\":\"access-token-2\",\"refresh_token\":\"refresh-token-2\",\"updated_at\":1735686000000}";
-        let underscore =
-          expect_ok "read underscore auth"
-            (effect_result "read underscore auth"
-               (Auth_state.read_auth_file (config ~root_dir:root ~auth_path ())))
+        expect_none "missing identity"
+          (expect_ok "read missing identity"
+             (effect_result "read missing identity"
+                (Auth_state.read_identity_file config)));
+        let identity =
+          expect_ok "phrase"
+            (Wallet_identity.of_phrase
+               (String.uppercase_ascii (" " ^ junk ^ "\n")))
         in
-        let underscore = expect_some "underscore auth" underscore in
-        expect_equal "default provider" "cognito" underscore.provider;
-        expect_equal "underscore id token" "id-token-2"
-          (expect_some "underscore id token" underscore.id_token);
-        expect_int64 "underscore updated-at" 1_735_686_000_000L
-          (Time.time_to_epoch_ms underscore.updated_at);
-        let from_config =
-          expect_ok "resolve config auth"
-            (effect_result "resolve config auth"
-               (Auth_state.resolve_auth
-                  (config ~id_token:"id-token-cfg"
-                     ~access_token:"access-token-cfg"
-                     ~refresh_token:"refresh-token-cfg" ())))
+        expect_equal "address" "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
+          identity.Wallet_identity.address;
+        expect_equal "normalized phrase" junk identity.Wallet_identity.phrase;
+        ignore
+          (expect_ok "write identity"
+             (effect_result "write identity"
+                (Auth_state.write_identity_file config identity)));
+        let stored =
+          expect_some "stored identity"
+            (expect_ok "read identity"
+               (effect_result "read identity"
+                  (Auth_state.read_identity_file config)))
         in
-        expect_equal "config auth provider" "cognito" from_config.provider;
-        expect_equal "config auth id token" "id-token-cfg"
-          (expect_some "config id token" from_config.id_token);
-        expect_none "config auth expires-at" from_config.expires_at;
-        expect_error_code "resolve missing auth" "missing-auth"
-          (effect_result "resolve missing auth"
-             (Auth_state.resolve_auth
-                (config ~root_dir:root
-                   ~auth_path:(Node.Path.join [| root; "missing.json" |])
-                   ())));
+        expect_bool "same identity" true (Wallet_identity.same identity stored);
+        write_file identity_path
+          (Printf.sprintf
+             "{\"phrase\":%S,\"address\":\"0x0000000000000000000000000000000000000001\"}"
+             junk);
+        expect_error_code "tampered address" "invalid-identity-file"
+          (effect_result "read tampered identity"
+             (Auth_state.read_identity_file config));
+        write_file identity_path
+          "{\"phrase\":\"not a phrase\",\"address\":\"0x0000000000000000000000000000000000000001\"}";
+        expect_error_code "invalid phrase on file" "invalid-identity-file"
+          (effect_result "read invalid identity"
+             (Auth_state.read_identity_file config));
+        expect_error_code "invalid phrase" "invalid-phrase"
+          (Wallet_identity.of_phrase "abandon abandon");
         remove_tree root
       with exn ->
         remove_tree root;
         fail_test (Printexc.to_string exn));
 
   test_promise
-    "CLI parity auth refresh uses token endpoint and validates id token"
+    "CLI parity resolve auth signs in again with the identity on file"
     (fun () ->
-      let request_bodies = ref Vec.empty in
-      let token_server response_body =
-        create_server (fun[@u] req res ->
-            let body = ref "" in
-            req_set_encoding req "utf8";
-            req_on_data req "data" (fun[@u] chunk -> body := !body ^ chunk);
-            req_on_end req "end" (fun[@u] () ->
-                request_bodies := Vec.push_back !request_bodies !body;
-                if req_method req <> "POST" || req_url req <> "/oauth2/token"
-                then write_json res 404 (error_response "not found")
-                else write_json res 200 response_body))
-      in
-      let* () =
-        with_server
-          (token_server
-             "{\"id_token\":\"eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJmcmVzaC11c2VyIiwiZW1haWwiOiJmcmVzaEBleGFtcGxlLmNvbSIsImV4cCI6NDEwMjQ0NDgwMH0.signature\",\"access_token\":\"fresh-access-token\"}")
-          (fun base_url ->
-            let raw_config =
-              Edn_util.map
-                [
-                  ( Edn_util.keyword "oauth-token-endpoint",
-                    Edn_util.string (base_url ^ "/oauth2/token") );
-                  ( Edn_util.keyword "oauth-client-id",
-                    Edn_util.string "client-1" );
-                ]
-            in
-            let config =
-              config ~raw_file_config:raw_config
-                ~refresh_token:"refresh-token-cfg" ()
-            in
-            let* refreshed =
-              effect_to_promise
-                (Auth_state.refresh_auth config
-                   (sample_auth ~id_token:(Some "expired-id")
-                      ~access_token:(Some "expired-access")
-                      ~refresh_token:(Some "refresh-token-1")
-                      ~expires_at:(Time.time_of_epoch_ms 0L) ()))
-            in
-            let refreshed = expect_ok "refresh auth" refreshed in
-            expect_equal "fresh id token sub" "fresh-user"
-              (expect_some "fresh sub" refreshed.sub);
-            expect_equal "fresh email" "fresh@example.com"
-              (expect_some "fresh email" refreshed.email);
-            expect_equal "fresh access token" "fresh-access-token"
-              (expect_some "fresh access token" refreshed.access_token);
-            expect_equal "refresh token preserved" "refresh-token-1"
-              (expect_some "fresh refresh token" refreshed.refresh_token);
-            let body = Vec.string_concat "\n" !request_bodies in
-            expect_named_contains "refresh grant type" body
-              "grant_type=refresh_token";
-            expect_named_contains "refresh token body" body
-              "refresh_token=refresh-token-1";
-            expect_named_contains "refresh client id" body "client_id=client-1";
-            Js.Promise.resolve pass)
-      in
-      with_server
-        (token_server
-           "{\"access_token\":\"access-token-only\",\"refresh_token\":\"refresh-token-2\"}")
-        (fun base_url ->
-          let raw_config =
-            Edn_util.map
-              [
-                ( Edn_util.keyword "oauth-token-endpoint",
-                  Edn_util.string (base_url ^ "/oauth2/token") );
-              ]
-          in
-          let* result =
-            effect_to_promise
-              (Auth_state.refresh_auth
-                 (config ~raw_file_config:raw_config ())
-                 (sample_auth ~refresh_token:(Some "refresh-token-1") ()))
-          in
-          expect_error_code "missing id token" "missing-id-token" result;
-          Js.Promise.resolve pass));
-
-  test_promise "CLI parity auth refresh returns precise token errors" (fun () ->
-      let token_server response_body =
-        create_server (fun[@u] req res ->
-            let body = ref "" in
-            req_set_encoding req "utf8";
-            req_on_data req "data" (fun[@u] chunk -> body := !body ^ chunk);
-            req_on_end req "end" (fun[@u] () ->
-                ignore !body;
-                if req_method req <> "POST" || req_url req <> "/oauth2/token"
-                then write_json res 404 (error_response "not found")
-                else write_json res 200 response_body))
-      in
-      let config_for base_url =
-        config
-          ~raw_file_config:
-            (Edn_util.map
-               [
-                 ( Edn_util.keyword "oauth-token-endpoint",
-                   Edn_util.string (base_url ^ "/oauth2/token") );
-               ])
-          ()
-      in
-      let* () =
-        with_server
-          (token_server
-             "{\"id_token\":\"not-a-jwt\",\"access_token\":\"access-token\"}")
-          (fun base_url ->
-            let* result =
-              effect_to_promise
-                (Auth_state.refresh_auth (config_for base_url)
-                   (sample_auth ~refresh_token:(Some "refresh-token-1") ()))
-            in
-            expect_error_code "invalid token" "invalid-auth-token" result;
-            Js.Promise.resolve pass)
-      in
-      let missing_result = ref None in
-      let* () =
-        with_server (token_server "{\"access_token\":\"access-token-only\"}")
-          (fun base_url ->
-            let* result =
-              effect_to_promise
-                (Auth_state.refresh_auth (config_for base_url)
-                   (sample_auth ~refresh_token:(Some "refresh-token-1") ()))
-            in
-            missing_result := Some result;
-            Js.Promise.resolve pass)
-      in
-      let result = expect_some "missing id token result" !missing_result in
-      match result with
-      | Ok _ ->
-          fail_test "missing id token: expected Error";
-          Js.Promise.resolve pass
-      | Error err ->
-          expect_equal "missing id token code" "missing-id-token"
-            (Error.code_to_string err.Error.code);
-          Js.Promise.resolve pass);
-
-  test_promise
-    "CLI parity resolve auth refreshes expired file auth and stores it"
-    (fun () ->
-      let root = temp_dir "logseq-cli-parity-auth-resolve-refresh-" in
+      let root = temp_dir "logseq-cli-parity-auth-resolve-" in
       let auth_path = Node.Path.join [| root; "auth.json" |] in
-      let refreshed_id_token =
-        id_token ~sub:"resolved-user" ~email:"resolved@example.com" ()
-      in
-      let response_body =
-        Printf.sprintf
-          "{\"id_token\":%s,\"access_token\":\"resolved-access-token\",\"refresh_token\":\"resolved-refresh-token\"}"
-          (Js.Json.stringify (Js.Json.string refreshed_id_token))
-      in
-      let server =
-        create_server (fun[@u] req res ->
-            let body = ref "" in
-            req_set_encoding req "utf8";
-            req_on_data req "data" (fun[@u] chunk -> body := !body ^ chunk);
-            req_on_end req "end" (fun[@u] () ->
-                ignore !body;
-                if req_method req <> "POST" || req_url req <> "/oauth2/token"
-                then write_json res 404 (error_response "not found")
-                else write_json res 200 response_body))
-      in
-      with_server server (fun base_url ->
-          let raw_config =
-            Edn_util.map
-              [
-                ( Edn_util.keyword "oauth-token-endpoint",
-                  Edn_util.string (base_url ^ "/oauth2/token") );
-              ]
-          in
+      let identity_path = Node.Path.join [| root; "identity.json" |] in
+      let calls = ref Vec.empty in
+      let messages = ref Vec.empty in
+      with_server (sync_auth_server ~calls ~messages) (fun base_url ->
           let config =
-            config ~root_dir:root ~auth_path ~raw_file_config:raw_config ()
+            config ~root_dir:root ~auth_path ~identity_path ~http_base:base_url
+              ()
+          in
+          let* missing = effect_to_promise (Auth_state.resolve_auth config) in
+          expect_error_code "resolve without auth or identity" "missing-auth"
+            missing;
+          let identity =
+            expect_ok "phrase"
+              (Wallet_identity.of_phrase
+                 "test test test test test test test test test test test junk")
           in
           let* written =
-            effect_to_promise
-              (Auth_state.write_auth_file config
-                 (sample_auth ~id_token:(Some "expired-id-token")
-                    ~access_token:(Some "expired-access-token")
-                    ~refresh_token:(Some "refresh-token-1")
-                    ~expires_at:(Time.time_of_epoch_ms 0L) ()))
+            effect_to_promise (Auth_state.write_identity_file config identity)
           in
-          ignore (expect_ok "write expired auth" written);
+          ignore (expect_ok "write identity" written);
+          let* expired =
+            effect_to_promise
+              (Auth_state.write_auth_file config (sample_auth ~exp:1L ()))
+          in
+          ignore (expect_ok "write expired auth" expired);
           let* resolved = effect_to_promise (Auth_state.resolve_auth config) in
-          let resolved = expect_ok "resolve refreshed auth" resolved in
-          expect_equal "resolved sub" "resolved-user"
-            (expect_some "resolved sub" resolved.sub);
-          expect_equal "resolved email" "resolved@example.com"
-            (expect_some "resolved email" resolved.email);
-          expect_equal "resolved access" "resolved-access-token"
-            (expect_some "resolved access" resolved.access_token);
+          let resolved = expect_ok "resolve auth" resolved in
+          expect_equal "resolved sub"
+            (String.lowercase_ascii identity.Wallet_identity.address)
+            resolved.sub;
+          expect_equal "resolved name" "anon" resolved.username;
+          expect_equal "requests"
+            "GET /auth/config, GET /auth/nonce, POST /auth/siwe"
+            (Vec.string_concat ", " !calls);
           let* stored = effect_to_promise (Auth_state.read_auth_file config) in
           let stored =
-            expect_some "stored refreshed auth"
-              (expect_ok "read refreshed auth" stored)
+            expect_some "stored auth" (expect_ok "read stored auth" stored)
           in
-          expect_equal "stored id token" refreshed_id_token
-            (expect_some "stored id token" stored.id_token);
-          expect_equal "stored refresh token" "resolved-refresh-token"
-            (expect_some "stored refresh token" stored.refresh_token);
+          expect_equal "stored token" resolved.access_token stored.access_token;
+          let* cached = effect_to_promise (Auth_state.resolve_auth config) in
+          let cached = expect_ok "resolve cached auth" cached in
+          expect_equal "cached token" resolved.access_token cached.access_token;
+          expect_int "no new requests" 3 (Vec.length !calls);
           remove_tree root;
           Js.Promise.resolve pass));
 
@@ -1039,20 +907,49 @@ let () =
       let login_request = expect_parse_ok "login parse" [| "login" |] in
       (match login_request.command with
       | Cli_request.Auth
-          (Auth_command.Parsed_login { username = None; password = None }) ->
+          (Auth_command.Parsed_login
+             { username = None; phrase = None; show_phrase = false }) ->
           pass
       | _ -> fail_test "login parse: expected auth login");
+      let named_request =
+        expect_parse_ok "login parse with options"
+          [| "login"; "--username"; "Ada"; "--phrase"; "a b"; "--show-phrase" |]
+      in
+      (match named_request.command with
+      | Cli_request.Auth
+          (Auth_command.Parsed_login
+             { username = Some "Ada"; phrase = Some "a b"; show_phrase = true })
+        ->
+          pass
+      | _ -> fail_test "login parse: expected the identity options");
       let logout_request = expect_parse_ok "logout parse" [| "logout" |] in
       (match logout_request.command with
       | Cli_request.Auth Auth_command.Parsed_logout -> pass
       | _ -> fail_test "logout parse: expected auth logout");
       (match
          Auth_command.build (config ()) (Global_opts.create ())
-           (Auth_command.Parsed_login { username = None; password = None })
+           (Auth_command.Parsed_login
+              { username = Some "Ada"; phrase = None; show_phrase = true })
        with
-      | Ok (Auth_command.Login Auth_state.Browser_login) -> pass
+      | Ok
+          (Auth_command.Login
+             {
+               Auth_state.requested_name = Some "Ada";
+               phrase = None;
+               show_phrase = true;
+             }) ->
+          pass
       | Ok _ -> fail_test "login build: expected Login"
       | Error err -> fail_test ("login build: " ^ err.Error.message));
+      (match
+         Auth_command.build (config ()) (Global_opts.create ())
+           (Auth_command.Parsed_login
+              { username = Some " "; phrase = None; show_phrase = false })
+       with
+      | Error err ->
+          expect_equal "blank name" "invalid-options"
+            (Error.code_to_string err.Error.code)
+      | Ok _ -> fail_test "login build: blank username accepted");
       match
         Auth_command.build (config ()) (Global_opts.create ())
           Auth_command.Parsed_logout
@@ -1064,7 +961,7 @@ let () =
   test "CLI parity Windows open_url keeps query params inside start URL"
     (fun () ->
       let url =
-        "https://logseq-prod.auth.us-east-1.amazoncognito.com/oauth2/authorize?response_type=code&client_id=abc&redirect_uri=http%3A%2F%2Flocalhost%3A8765%2Fauth%2Fcallback&state=xyz&code_challenge=pkce&code_challenge_method=S256"
+        "https://sync.example.test/share?graph=abc&state=xyz&redirect_uri=http%3A%2F%2Flocalhost%3A8765%2Fcallback"
       in
       try
         start_open_url_capture ();
@@ -1087,19 +984,7 @@ let () =
     (fun () ->
       let root = temp_dir "logseq-cli-parity-auth-logout-" in
       let auth_path = Node.Path.join [| root; "auth.json" |] in
-      let raw_config =
-        Edn_util.map
-          [
-            (Edn_util.keyword "open-browser", Edn_util.bool false);
-            (Edn_util.keyword "oauth-logout-state", Edn_util.string "state-1");
-          ]
-      in
-      let config =
-        {
-          (config ~root_dir:root ~auth_path ()) with
-          raw_file_config = Some raw_config;
-        }
-      in
+      let config = config ~root_dir:root ~auth_path () in
       let deleted_flag result =
         let data = expect_some "logout data" (Cli_result.data_value result) in
         expect_some "deleted flag" (Edn_util.get_bool data "deleted")
@@ -1136,7 +1021,7 @@ let () =
       try
         write_file cfg_path
           "{:graph \"file-graph\" :root-dir \"file-root\" :timeout-ms 111 \
-           :login-timeout-ms 444 :logout-timeout-ms 555 :output-format :edn \
+           :output-format :edn \
            :auth-token \"legacy-secret\" :retries 2}\n";
         let config =
           resolve_config
@@ -1145,8 +1030,6 @@ let () =
                 ("LOGSEQ_CLI_GRAPH", "env-graph");
                 ("LOGSEQ_CLI_ROOT_DIR", "env-root");
                 ("LOGSEQ_CLI_TIMEOUT_MS", "222");
-                ("LOGSEQ_CLI_LOGIN_TIMEOUT_MS", "666");
-                ("LOGSEQ_CLI_LOGOUT_TIMEOUT_MS", "777");
                 ("LOGSEQ_CLI_OUTPUT", "json");
               |]
             (Global_opts.create
@@ -1160,10 +1043,6 @@ let () =
           (Cli_primitive.string_of_graph (expect_some "graph" config.graph));
         expect_equal "root-dir" "argv-root" config.root_dir;
         expect_int64 "timeout" 333L (Time.span_to_ms config.timeout_span);
-        expect_int64 "login timeout" 666L
-          (Time.span_to_ms config.login_timeout_span);
-        expect_int64 "logout timeout" 777L
-          (Time.span_to_ms config.logout_timeout_span);
         expect_equal "output" "human"
           (mode_text (expect_some "output" config.output_format));
         (match config.raw_file_config with
@@ -1214,7 +1093,7 @@ let () =
         remove_tree root;
         fail_test (Printexc.to_string exn));
 
-  test "CLI parity config defaults use standard root URLs and timeouts"
+  test "CLI parity config defaults leave the sync server unset"
     (fun () ->
       let root = temp_dir "logseq-cli-parity-config-default-" in
       let cfg_path = Node.Path.join [| root; "missing-cli.edn" |] in
@@ -1227,15 +1106,9 @@ let () =
           (Node.Path.join
              [| Sys.getenv_opt "HOME" |> Option.value ~default:"."; "logseq" |])
           config.root_dir;
-        expect_equal "ws-url" "wss://api.logseq.io/sync/%s"
-          (expect_some "ws-url" config.ws_url);
-        expect_equal "http-base" "https://api.logseq.io"
-          (expect_some "http-base" config.http_base);
+        expect_none "ws-url" config.ws_url;
+        expect_none "http-base" config.http_base;
         expect_int64 "timeout" 10_000L (Time.span_to_ms config.timeout_span);
-        expect_int64 "login timeout" 300_000L
-          (Time.span_to_ms config.login_timeout_span);
-        expect_int64 "logout timeout" 120_000L
-          (Time.span_to_ms config.logout_timeout_span);
         expect_int "title max width" 40 config.list_title_max_display_width;
         remove_tree root
       with exn ->
@@ -1255,15 +1128,9 @@ let () =
           (Node.Path.join
              [| Sys.getenv_opt "HOME" |> Option.value ~default:"."; "logseq" |])
           config.root_dir;
-        expect_equal "ws-url" "wss://api.logseq.io/sync/%s"
-          (expect_some "ws-url" config.ws_url);
-        expect_equal "http-base" "https://api.logseq.io"
-          (expect_some "http-base" config.http_base);
+        expect_none "ws-url" config.ws_url;
+        expect_none "http-base" config.http_base;
         expect_int64 "timeout" 10_000L (Time.span_to_ms config.timeout_span);
-        expect_int64 "login timeout" 300_000L
-          (Time.span_to_ms config.login_timeout_span);
-        expect_int64 "logout timeout" 120_000L
-          (Time.span_to_ms config.logout_timeout_span);
         expect_int "title max width" 40 config.list_title_max_display_width;
         remove_tree root
       with exn ->

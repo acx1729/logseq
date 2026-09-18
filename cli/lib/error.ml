@@ -17,16 +17,13 @@ type code =
   | Asset_tag_not_found
   | Asset_type_missing
   | Asset_uuid_missing
-  | Auth_code_exchange_failed
   | Auth_file_delete_failed
   | Auth_file_write_failed
-  | Auth_refresh_failed
   | Backup_create_failed
   | Backup_not_found
   | Block_link_cycle
   | Block_link_target_not_found
   | Block_not_found
-  | Browser_open_failed
   | Codex_not_found
   | Codex_session_id_missing
   | Codex_start_failed
@@ -44,33 +41,27 @@ type code =
   | Graph_not_exists
   | Graph_not_removed
   | Graph_validation_failed
+  | Identity_exists
+  | Identity_file_write_failed
   | Invalid_auth_file
-  | Invalid_auth_response
   | Invalid_auth_token
   | Invalid_blocks
-  | Invalid_callback_request
-  | Invalid_callback_state
   | Invalid_config
+  | Invalid_identity_file
   | Invalid_options
+  | Invalid_phrase
   | Invalid_property_target
   | Invalid_query
   | Invalid_source
   | Invalid_tag_target
   | Invalid_target
-  | Login_callback_error
-  | Login_callback_not_found
-  | Login_callback_server_start_failed
-  | Login_not_configured
-  | Login_timeout
-  | Logout_not_configured
   | Missing_asset_selector
   | Missing_auth
-  | Missing_callback_code
   | Missing_content
   | Missing_dst
   | Missing_examples
   | Missing_graph
-  | Missing_id_token
+  | Missing_http_base
   | Missing_page_name
   | Missing_property_name
   | Missing_query
@@ -84,9 +75,6 @@ type code =
   | Not_implemented
   | Page_hierarchy_parent_cycle
   | Page_not_found
-  | Password_auth_disabled
-  | Password_auth_failed
-  | Password_auth_rejected
   | Property_built_in
   | Property_hidden
   | Property_not_found
@@ -101,6 +89,7 @@ type code =
   | Server_start_failed
   | Server_start_timeout_orphan
   | Server_stop_timeout
+  | Sign_in_failed
   | Skill_home_dir_unavailable
   | Skill_install_failed
   | Skill_show_failed
@@ -122,7 +111,6 @@ type code =
   | Task_tag_not_found
   | Unknown_command
   | Unknown_query
-  | Unsupported_auth_challenge
   | Unsupported_input_format
   | Unsupported_output_format
   | Upsert_id_not_found
@@ -171,16 +159,13 @@ let code_to_string = function
   | Asset_tag_not_found -> "asset-tag-not-found"
   | Asset_type_missing -> "asset-type-missing"
   | Asset_uuid_missing -> "asset-uuid-missing"
-  | Auth_code_exchange_failed -> "auth-code-exchange-failed"
   | Auth_file_delete_failed -> "auth-file-delete-failed"
   | Auth_file_write_failed -> "auth-file-write-failed"
-  | Auth_refresh_failed -> "auth-refresh-failed"
   | Backup_create_failed -> "backup-create-failed"
   | Backup_not_found -> "backup-not-found"
   | Block_link_cycle -> "block-link-cycle"
   | Block_link_target_not_found -> "block-link-target-not-found"
   | Block_not_found -> "block-not-found"
-  | Browser_open_failed -> "browser-open-failed"
   | Codex_not_found -> "codex-not-found"
   | Codex_session_id_missing -> "codex-session-id-missing"
   | Codex_start_failed -> "codex-start-failed"
@@ -198,33 +183,27 @@ let code_to_string = function
   | Graph_not_exists -> "graph-not-exists"
   | Graph_not_removed -> "graph-not-removed"
   | Graph_validation_failed -> "graph-validation-failed"
+  | Identity_exists -> "identity-exists"
+  | Identity_file_write_failed -> "identity-file-write-failed"
   | Invalid_auth_file -> "invalid-auth-file"
-  | Invalid_auth_response -> "invalid-auth-response"
   | Invalid_auth_token -> "invalid-auth-token"
   | Invalid_blocks -> "invalid-blocks"
-  | Invalid_callback_request -> "invalid-callback-request"
-  | Invalid_callback_state -> "invalid-callback-state"
   | Invalid_config -> "invalid-config"
+  | Invalid_identity_file -> "invalid-identity-file"
   | Invalid_options -> "invalid-options"
+  | Invalid_phrase -> "invalid-phrase"
   | Invalid_property_target -> "invalid-property-target"
   | Invalid_query -> "invalid-query"
   | Invalid_source -> "invalid-source"
   | Invalid_tag_target -> "invalid-tag-target"
   | Invalid_target -> "invalid-target"
-  | Login_callback_error -> "login-callback-error"
-  | Login_callback_not_found -> "login-callback-not-found"
-  | Login_callback_server_start_failed -> "login-callback-server-start-failed"
-  | Login_not_configured -> "login-not-configured"
-  | Login_timeout -> "login-timeout"
-  | Logout_not_configured -> "logout-not-configured"
   | Missing_asset_selector -> "missing-asset-selector"
   | Missing_auth -> "missing-auth"
-  | Missing_callback_code -> "missing-callback-code"
   | Missing_content -> "missing-content"
   | Missing_dst -> "missing-dst"
   | Missing_examples -> "missing-examples"
   | Missing_graph -> "missing-graph"
-  | Missing_id_token -> "missing-id-token"
+  | Missing_http_base -> "missing-http-base"
   | Missing_page_name -> "missing-page-name"
   | Missing_property_name -> "missing-property-name"
   | Missing_query -> "missing-query"
@@ -238,9 +217,6 @@ let code_to_string = function
   | Not_implemented -> "not-implemented"
   | Page_hierarchy_parent_cycle -> "page-hierarchy-parent-cycle"
   | Page_not_found -> "page-not-found"
-  | Password_auth_disabled -> "password-auth-disabled"
-  | Password_auth_failed -> "password-auth-failed"
-  | Password_auth_rejected -> "password-auth-rejected"
   | Property_built_in -> "property-built-in"
   | Property_hidden -> "property-hidden"
   | Property_not_found -> "property-not-found"
@@ -256,6 +232,7 @@ let code_to_string = function
   | Server_start_failed -> "server-start-failed"
   | Server_start_timeout_orphan -> "server-start-timeout-orphan"
   | Server_stop_timeout -> "server-stop-timeout"
+  | Sign_in_failed -> "sign-in-failed"
   | Skill_home_dir_unavailable -> "skill-home-dir-unavailable"
   | Skill_install_failed -> "skill-install-failed"
   | Skill_show_failed -> "skill-show-failed"
@@ -277,7 +254,6 @@ let code_to_string = function
   | Task_tag_not_found -> "task-tag-not-found"
   | Unknown_command -> "unknown-command"
   | Unknown_query -> "unknown-query"
-  | Unsupported_auth_challenge -> "unsupported-auth-challenge"
   | Unsupported_input_format -> "unsupported-input-format"
   | Unsupported_output_format -> "unsupported-output-format"
   | Upsert_id_not_found -> "upsert-id-not-found"

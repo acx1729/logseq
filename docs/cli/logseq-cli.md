@@ -58,11 +58,11 @@ Supported keys include:
   - Graph directories under `<root-dir>/graphs` are user-facing graph names e.g. `demo` and do not start with `logseq_db_`.
 - `:output-format` - Format for output. Default is `:human`. Use `:json` or `:edn` for scripting.
 - `:list-title-max-display-width` - For `:human` output, the max display width for TITLE column, defaulting to `40`.
-- `:http-base` - Http base domain for sync service. Interact with this via `sync config`.
-- `:ws-url` - Websocket url for sync service. Interact with this via `sync config`.
+- `:http-base` - HTTP address of the sync server, e.g. `https://logseq.example`. Required for sync and login. Interact with this via `sync config`.
+- `:ws-url` - WebSocket URL of the sync server with `%s` for the graph id, e.g. `wss://logseq.example/sync/%s`. Required for sync. Interact with this via `sync config`.
 - `:timeout-ms` - Request timeout in milliseconds.
-- `:login-timeout-ms` - Login callback timeout. Defaults to 5 minutes.
-- `:logout-timeout-ms` - Logout callback timeout. Defaults to 2 minutes.
+- `:auth-path` - Where the session token is stored. Defaults to `~/logseq/auth.json`.
+- `:identity-path` - Where this machine's identity (recovery phrase) is stored. Defaults to `~/logseq/identity.json`.
 - `:custom-queries` - Map of custom queries which are run with `query --name`. See [below for more](#custom-queries).
 
 CLI global flags take precedence over environment variables, which take precedence over the config file. Here is a mapping of these three:
@@ -73,12 +73,12 @@ CLI global flags take precedence over environment variables, which take preceden
 | :root-dir | $LOGSEQ_CLI_ROOT_DIR | --root-dir |
 | :output-format | $LOGSEQ_CLI_OUTPUT | --output |
 | :timeout-ms | $LOGSEQ_CLI_TIMEOUT_MS | --timeout-ms |
-| :login-timeout-ms | $LOGSEQ_CLI_LOGIN_TIMEOUT_MS | n/a |
-| :logout-timeout-ms | $LOGSEQ_CLI_LOGOUT_TIMEOUT_MS | n/a  |
+| :http-base | $LOGSEQ_CLI_HTTP_BASE | n/a |
+| :ws-url | $LOGSEQ_CLI_WS_URL | n/a |
 
 Legacy notes:
 * Migration note: If you previously used `~/.logseq/cli-graphs` or `~/.logseq/cli.edn`, pass `--root-dir` and/or `--config` to continue using equivalent custom locations.
-* `cli.edn` no longer persists cloud auth tokens. CLI login state is stored separately in `~/logseq/auth.json`.
+* `cli.edn` never holds tokens. The session token lives in `~/logseq/auth.json` and the identity in `~/logseq/identity.json`.
 
 ### Custom Queries
 
@@ -89,34 +89,30 @@ Custom queries are defined in `:custom-queries` of a config file. This config is
 
 ## Authentication
 
-Use `logseq login` to authenticate the current machine with Logseq cloud.
+The CLI signs in to the sync server named by `:http-base` with an identity it
+holds itself: a BIP-39 recovery phrase in `~/logseq/identity.json` (mode 0600)
+from which its Ethereum address derives. No browser, wallet extension or
+password is involved; the sync server verifies a Sign-In with Ethereum
+message signed by that identity and mints the session token.
 
-- `logseq login` starts a temporary callback server at `http://localhost:8765/auth/callback`, opens a browser to the Logseq Cognito Hosted UI, exchanges the returned authorization code, and writes `~/logseq/auth.json`.
-- `logseq login --username <username> --password <password>` authenticates directly with Cognito without opening a browser or starting a callback server. Supply both non-empty values. The username is a Cognito sign-in identifier, not necessarily an email address.
-- `logseq logout` removes `~/logseq/auth.json`, opens a browser to the Cognito Hosted UI logout endpoint, and completes the browser logout flow at `http://localhost:8765/logout-complete`.
-- Sync commands still pass an in-memory runtime `:auth-token` to db-sync, but that token is now resolved from `auth.json` instead of `cli.edn`.
+- `logseq login` creates the identity on first use, signs in, and writes the token to `~/logseq/auth.json` (`{"access-token": ..., "updated-at": ...}`). It prints `identity-path`, `identity-created`, `address`, `username`, `expires-at`, `updated-at` and `auth-path`.
+- `logseq login --username <name>` sends a display name, which the sync server stores and shows to other members of your graphs. A login without `--username` keeps the name on file; the first login without one records the short form of the address.
+- `logseq login --show-phrase` also prints the recovery phrase. Back it up: it is the only way to use the same address on another machine or in the app.
+- `logseq login --phrase "<words>"` imports an identity from its recovery phrase (the one the app or another machine shows). It refuses with `identity-exists` when this machine already holds a different identity; remove `identity.json` first to replace it.
+- `logseq logout` deletes `~/logseq/auth.json` and keeps the identity, so the next sync command or `logseq login` signs in again silently.
+- Sync commands read the token from `auth.json`. When it is missing or expired and an identity exists, the CLI signs in again before the command runs; without an identity they fail with `missing-auth`.
+- Sign-in failures (`sign-in-failed`, `missing-http-base`) leave the existing auth file untouched and exit nonzero.
 
-Default auth file: `~/logseq/auth.json`
+Default auth file: `~/logseq/auth.json`. Default identity file: `~/logseq/identity.json`. Both paths can be changed with `:auth-path` and `:identity-path`.
 
-Auth file contents include the persisted Cognito `id-token`, `access-token`, `refresh-token`, `expires-at`, `sub`, `email`, and `updated-at` values needed for headless refresh.
-
-Password login:
-- Passwords are passed exactly as supplied, including leading and trailing spaces. Quote shell arguments; use `--password='<password>'` when a password starts with `-`.
-- Command-line passwords can appear in shell history and process listings. This mode does not read credentials from environment variables, stdin, prompts, or `cli.edn`.
-- MFA, forced password changes, and other Cognito challenges return an explicit error; challenge continuation and social-provider password login are not supported. You can run `logseq login` separately to use the browser flow.
-- Password authentication uses the us-east-1 Cognito IDP endpoint and the configured OAuth client ID. A custom sync `http-base` does not change that endpoint. The app client must enable `USER_PASSWORD_AUTH` and must not require a client secret.
-- Successful login writes the same private auth file (or configured `:auth-path`) and returns `auth-path`, `updated-at`, and available `email`/`sub`. Password mode omits `authorize-url` and `opened`. It never stores the username/password pair or includes tokens in command output.
-- Authentication, transport, timeout, and response-validation failures leave the existing auth file untouched and exit nonzero. There is no automatic browser retry.
-- The existing OAuth refresh path is retained. Password login, refresh, and read-only authenticated sync were verified against the default production client on 2026-09-17. Custom client and user-pool configurations require their own verification.
+The same address is a member of the same graphs everywhere: use the phrase from the app's account panel here, or the phrase from `--show-phrase` in the app, and the graphs shared with that address are visible from both.
 
 Verbose logging:
 - `--verbose` enables structured debug logs to stderr for CLI option parsing and db-worker-node API calls.
 - `sync download` can stream realtime progress lines to stdout when progress is enabled; debug previews remain truncated.
 
 Timeouts:
-- `--timeout-ms` controls request timeout behavior for CLI transport and password authentication.
-- Login callback timeout is controlled separately by `:login-timeout-ms` / `LOGSEQ_CLI_LOGIN_TIMEOUT_MS` and defaults to 5 minutes.
-- Logout callback timeout is controlled separately by `:logout-timeout-ms` / `LOGSEQ_CLI_LOGOUT_TIMEOUT_MS` and defaults to 2 minutes.
+- `--timeout-ms` controls request timeout behavior for CLI transport and the sign-in requests.
 
 ## Commands
 
@@ -157,8 +153,8 @@ Server commands:
 - `doctor [--dev-script]` - run runtime diagnostics for `db-worker-node.js`, `root-dir` permissions, and running server readiness (`--dev-script` checks `static/db-worker-node.js` explicitly)
 
 Auth commands:
-- `login` - authenticate this machine and create/update `~/logseq/auth.json`
-- `logout` - remove persisted CLI auth from `~/logseq/auth.json`
+- `login [--username <name>] [--phrase "<words>"] [--show-phrase]` - sign in with this machine's identity, creating or importing it, and write `~/logseq/auth.json`
+- `logout` - remove the session token from `~/logseq/auth.json`; the identity stays
 
 Debug commands:
 - `debug pull --id <db-id> [--graph <name>]` - pull a raw entity by db id with selector `[*]`
@@ -268,7 +264,7 @@ Sync config persistence:
 - `sync config set/unset` writes non-auth sync config to the CLI config file selected by `--config`.
 - If `--config` is not provided, the default config path is `~/logseq/cli.edn`.
 - `sync config get` reads from that same config source.
-- Cloud auth is persisted separately in `~/logseq/auth.json`.
+- The session token is persisted separately in `~/logseq/auth.json` and the identity in `~/logseq/identity.json`.
 
 Inspect and edit commands:
 - `list page [--expand] [--limit <n>] [--offset <n>] [--sort <field>] [--order asc|desc]` - list pages (defaults to `--sort updated-at --order desc`)
@@ -440,7 +436,7 @@ id8 └── b8
 
 Troubleshooting:
 - If authenticated sync commands fail with missing or invalid local auth, run `logseq logout` and then `logseq login` again.
-- You can also manually remove `~/logseq/auth.json` and repeat `logseq login`.
+- You can also manually remove `~/logseq/auth.json` and repeat `logseq login`; removing `~/logseq/identity.json` gives this machine a new address, which loses access to graphs shared with the old one.
 
 Examples:
 

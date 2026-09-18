@@ -242,19 +242,12 @@ let add_runtime_auth key value fields =
 let runtime_auth_state config =
   let fields =
     Vec.empty
-    |> add_runtime_auth "auth/id-token" config.Cli_config.id_token
     |> add_runtime_auth "auth/access-token" config.Cli_config.access_token
-    |> add_runtime_auth "auth/refresh-token" config.Cli_config.refresh_token
   in
   if Vec.is_empty fields then None else Some (Edn_util.map_t_vec fields)
 
 let config_with_auth config (auth : Auth_state.auth_data) =
-  {
-    config with
-    Cli_config.id_token = auth.id_token;
-    access_token = auth.access_token;
-    refresh_token = auth.refresh_token;
-  }
+  { config with Cli_config.access_token = Some auth.access_token }
 
 let should_resolve_auth_file config =
   match

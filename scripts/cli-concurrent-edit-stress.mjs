@@ -229,17 +229,10 @@ function assertLocalUrl(url, label) {
 
 function authConfigLines(opts) {
   const auth = JSON.parse(readFileSync(opts.authPath, "utf8"));
-  const lines = [` :auth-path "${opts.authPath}"`];
-  if (typeof auth["refresh-token"] === "string" && auth["refresh-token"].length > 0) {
-    lines.push(` :refresh-token ${JSON.stringify(auth["refresh-token"])}`);
+  if (typeof auth["access-token"] !== "string" || auth["access-token"].length === 0) {
+    throw new Error(`auth file has no access-token: ${opts.authPath}`);
   }
-  if (typeof auth["id-token"] === "string" && auth["id-token"].length > 0) {
-    lines.push(` :id-token ${JSON.stringify(auth["id-token"])}`);
-  }
-  if (typeof auth["access-token"] === "string" && auth["access-token"].length > 0) {
-    lines.push(` :access-token ${JSON.stringify(auth["access-token"])}`);
-  }
-  return lines;
+  return [` :auth-path "${opts.authPath}"`];
 }
 
 export function stressConfigText(opts) {

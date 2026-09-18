@@ -2,12 +2,8 @@ type env = string -> string option
 
 type defaults = {
   timeout_span : float;
-  login_timeout_span : float;
-  logout_timeout_span : float;
   list_title_max_display_width : int;
   root_dir : Cli_primitive.path;
-  ws_url : Cli_primitive.url;
-  http_base : Cli_primitive.url;
 }
 
 type t = {
@@ -16,8 +12,6 @@ type t = {
   root_dir : Cli_primitive.path;
   config_path : Cli_primitive.path;
   timeout_span : float;
-  login_timeout_span : float;
-  logout_timeout_span : float;
   list_title_max_display_width : int;
   output_format : Output.Mode.packed option;
   verbose : bool;
@@ -25,9 +19,9 @@ type t = {
   ws_url : Cli_primitive.url option;
   http_base : Cli_primitive.url option;
   auth_path : Cli_primitive.path option;
-  id_token : string option;
+  identity_path : Cli_primitive.path option;
+  (* The session token resolved for this invocation; never read from cli.edn. *)
   access_token : string option;
-  refresh_token : string option;
   base_url : Cli_primitive.url option;
   owner_source : Cli_primitive.owner_source;
   project_dir : Cli_primitive.path option;
@@ -47,12 +41,8 @@ let default_config_path root_dir = Filename.concat root_dir "cli.edn"
 let defaults () =
   {
     timeout_span = Time.span_of_ms 10_000L;
-    login_timeout_span = Time.span_of_ms 300_000L;
-    logout_timeout_span = Time.span_of_ms 120_000L;
     list_title_max_display_width = 40;
     root_dir = default_root_dir ();
-    ws_url = "wss://api.logseq.io/sync/%s";
-    http_base = "https://api.logseq.io";
   }
 
 let db_version_prefix = "logseq_db_"
@@ -125,8 +115,6 @@ let env_config env =
     |> env_string "LOGSEQ_CLI_ROOT_DIR" env "root-dir"
     |> env_string "LOGSEQ_CLI_CONFIG" env "config-path"
     |> env_int "LOGSEQ_CLI_TIMEOUT_MS" env "timeout-ms"
-    |> env_int "LOGSEQ_CLI_LOGIN_TIMEOUT_MS" env "login-timeout-ms"
-    |> env_int "LOGSEQ_CLI_LOGOUT_TIMEOUT_MS" env "logout-timeout-ms"
     |> env_string "LOGSEQ_CLI_OUTPUT" env "output-format"
     |> env_string "LOGSEQ_CLI_WS_URL" env "ws-url"
     |> env_string "LOGSEQ_CLI_HTTP_BASE" env "http-base"
@@ -147,10 +135,7 @@ let validate_env_int_value key env =
 
 let checked_env_config env =
   Error.bind (validate_env_int_value "LOGSEQ_CLI_TIMEOUT_MS" env) (fun () ->
-      Error.bind (validate_env_int_value "LOGSEQ_CLI_LOGIN_TIMEOUT_MS" env)
-        (fun () ->
-          Error.bind (validate_env_int_value "LOGSEQ_CLI_LOGOUT_TIMEOUT_MS" env)
-            (fun () -> Ok (env_config env))))
+      Ok (env_config env))
 
 let sanitize_file_config value =
   match Edn_util.as_map value with
@@ -244,18 +229,12 @@ let validate_output_config_value ~source key value =
 
 let validate_config_values ~source value =
   Error.bind (validate_int64_config_value ~source "timeout-ms" value) (fun () ->
-      Error.bind (validate_int64_config_value ~source "login-timeout-ms" value)
+      Error.bind
+        (validate_int_config_value ~source "list-title-max-display-width" value)
         (fun () ->
           Error.bind
-            (validate_int64_config_value ~source "logout-timeout-ms" value)
-            (fun () ->
-              Error.bind
-                (validate_int_config_value ~source
-                   "list-title-max-display-width" value) (fun () ->
-                  Error.bind
-                    (validate_output_config_value ~source "output-format" value)
-                    (fun () ->
-                      validate_output_config_value ~source "output" value)))))
+            (validate_output_config_value ~source "output-format" value)
+            (fun () -> validate_output_config_value ~source "output" value)))
 
 let first_some values = Vec.find_map (fun value -> value) values
 
@@ -342,17 +321,9 @@ let resolve ~(defaults : defaults) ~env (globals : Global_opts.t) =
                 Option.bind raw_file_config (fun value ->
                     Edn_util.get_string value "auth-path")
               in
-              let file_id_token =
+              let file_identity_path =
                 Option.bind raw_file_config (fun value ->
-                    Edn_util.get_string value "id-token")
-              in
-              let file_access_token =
-                Option.bind raw_file_config (fun value ->
-                    Edn_util.get_string value "access-token")
-              in
-              let file_refresh_token =
-                Option.bind raw_file_config (fun value ->
-                    Edn_util.get_string value "refresh-token")
+                    Edn_util.get_string value "identity-path")
               in
               let env_ws_url = Edn_util.get_string env_config "ws-url" in
               let env_http_base = Edn_util.get_string env_config "http-base" in
@@ -379,32 +350,6 @@ let resolve ~(defaults : defaults) ~env (globals : Global_opts.t) =
                      |])
                 |> Option.value ~default:defaults.timeout_span
               in
-              let login_timeout_span =
-                first_some
-                  (Vec.of_array
-                     [|
-                       span_option_of_ms
-                         (value_int64 "login-timeout-ms" env_config);
-                       span_option_of_ms
-                         (Option.bind raw_file_config
-                            (value_int64 "login-timeout-ms"));
-                       Some defaults.login_timeout_span;
-                     |])
-                |> Option.value ~default:defaults.login_timeout_span
-              in
-              let logout_timeout_span =
-                first_some
-                  (Vec.of_array
-                     [|
-                       span_option_of_ms
-                         (value_int64 "logout-timeout-ms" env_config);
-                       span_option_of_ms
-                         (Option.bind raw_file_config
-                            (value_int64 "logout-timeout-ms"));
-                       Some defaults.logout_timeout_span;
-                     |])
-                |> Option.value ~default:defaults.logout_timeout_span
-              in
               let list_title_max_display_width =
                 positive_or_default
                   (Option.bind raw_file_config
@@ -418,27 +363,16 @@ let resolve ~(defaults : defaults) ~env (globals : Global_opts.t) =
                   root_dir;
                   config_path;
                   timeout_span;
-                  login_timeout_span;
-                  logout_timeout_span;
                   list_title_max_display_width;
                   output_format;
                   verbose = globals.verbose;
                   profile = globals.profile;
-                  ws_url =
-                    Some
-                      (Option.value env_ws_url
-                         ~default:
-                           (Option.value file_ws_url ~default:defaults.ws_url));
+                  ws_url = first_some (Vec.of_array [| env_ws_url; file_ws_url |]);
                   http_base =
-                    Some
-                      (Option.value env_http_base
-                         ~default:
-                           (Option.value file_http_base
-                              ~default:defaults.http_base));
+                    first_some (Vec.of_array [| env_http_base; file_http_base |]);
                   auth_path = file_auth_path;
-                  id_token = file_id_token;
-                  access_token = file_access_token;
-                  refresh_token = file_refresh_token;
+                  identity_path = file_identity_path;
+                  access_token = None;
                   base_url;
                   owner_source = Cli_primitive.Cli;
                   project_dir = None;

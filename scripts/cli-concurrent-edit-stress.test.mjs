@@ -228,17 +228,10 @@ test("parses isolated local db-sync server paths", () => {
   assert.equal(opts.syncServerDataDir.endsWith("/tmp/stress/server-data"), true);
 });
 
-test("stress config includes runtime auth to avoid refresh during sync start", () => {
+test("stress config points the CLI at the auth file holding the token", () => {
   const dir = mkdtempSync(join(tmpdir(), "logseq-stress-auth-"));
   const authPath = join(dir, "auth.json");
-  writeFileSync(
-    authPath,
-    JSON.stringify({
-      "refresh-token": "refresh-1",
-      "id-token": "id-1",
-      "access-token": "access-1",
-    }),
-  );
+  writeFileSync(authPath, JSON.stringify({ "access-token": "access-1" }));
 
   const text = stressConfigText({
     httpBase: "http://127.0.0.1:18080",
@@ -247,9 +240,14 @@ test("stress config includes runtime auth to avoid refresh during sync start", (
   });
 
   assert.match(text, /:auth-path "/);
-  assert.match(text, /:refresh-token "refresh-1"/);
-  assert.match(text, /:id-token "id-1"/);
-  assert.match(text, /:access-token "access-1"/);
+  assert.doesNotMatch(text, /:access-token/);
+  assert.doesNotMatch(text, /:id-token/);
+
+  writeFileSync(authPath, JSON.stringify({ "id-token": "id-1" }));
+  assert.throws(
+    () => stressConfigText({ httpBase: "http://127.0.0.1:18080", wsUrl: "ws://127.0.0.1:18080/sync/%s", authPath }),
+    /no access-token/,
+  );
 });
 
 test("builds sync upload initialization command", () => {

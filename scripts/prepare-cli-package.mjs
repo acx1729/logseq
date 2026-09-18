@@ -64,6 +64,7 @@ const assertFreshCliRuntime = () => {
 
 const dependencyNames = [
   "@js-joda/core",
+  "@scure/bip39",
   "@zvec/bindings-darwin-arm64",
   "@zvec/bindings-linux-arm64",
   "@zvec/bindings-linux-x64",
@@ -75,6 +76,7 @@ const dependencyNames = [
   "mldoc",
   "picocolors",
   "string-width",
+  "viem",
   "ws",
 ];
 
