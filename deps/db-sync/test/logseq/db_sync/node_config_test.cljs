@@ -22,10 +22,10 @@
 (deftest normalize-config-drops-unknown-keys-test
   (let [cfg (normalize {:port 7777
                         :unknown-key "value"
-                        :cognito-issuer "value"})]
+                        :removed-key "value"})]
     (is (= 7777 (:port cfg)))
     (is (nil? (:unknown-key cfg)))
-    (is (nil? (:cognito-issuer cfg)))))
+    (is (nil? (:removed-key cfg)))))
 
 (deftest normalize-config-storage-driver-test
   (testing "sqlite storage driver accepted"

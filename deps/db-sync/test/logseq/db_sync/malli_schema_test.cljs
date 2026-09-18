@@ -4,7 +4,7 @@
 
 (def ^:private request-samples
   {:graphs/create {:graph-name "Demo"}
-   :graph-members/create {:email "user@example.com"}
+   :graph-members/create {:user-id "0x1111111111111111111111111111111111111111"}
    :graph-members/update {:role "member"}
    :sync/tx-batch {:t-before 0 :txs []}})
 

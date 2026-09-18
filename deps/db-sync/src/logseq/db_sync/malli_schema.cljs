@@ -63,9 +63,7 @@
 (def user-presence-schema
   [:map
    [:user-id :string]
-   [:email {:optional true} [:maybe :string]]
-   [:username {:optional true} [:maybe :string]]
-   [:name {:optional true} [:maybe :string]]])
+   [:username :string]])
 
 (def online-users-schema
   [:map
@@ -143,7 +141,6 @@
    [:role graph-member-role-schema]
    [:invited-by {:optional true} [:maybe :string]]
    [:created-at :int]
-   [:email {:optional true} [:maybe :string]]
    [:username {:optional true} [:maybe :string]]])
 
 (def graph-members-list-response-schema
@@ -174,13 +171,9 @@
    [:deleted :boolean]])
 
 (def graph-member-create-request-schema
-  [:or
-   [:map
-    [:user-id :string]
-    [:role {:optional true} graph-member-role-schema]]
-   [:map
-    [:email :string]
-    [:role {:optional true} graph-member-role-schema]]])
+  [:map
+   [:user-id :string]
+   [:role {:optional true} graph-member-role-schema]])
 
 (def graph-member-update-request-schema
   [:map

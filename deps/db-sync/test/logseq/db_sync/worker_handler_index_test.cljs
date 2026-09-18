@@ -238,6 +238,38 @@
                           (is false (str error))
                           (done)))))))
 
+(deftest graph-members-create-takes-a-wallet-address-test
+  (async done
+         (let [upserts (atom [])
+               post (fn [body]
+                      (js/Request. "http://localhost/graphs/graph-1/members"
+                                   #js {:method "POST"
+                                        :headers #js {"content-type" "application/json"}
+                                        :body (js/JSON.stringify (clj->js body))}))
+               route {:handler :graph-members/create
+                      :path-params {:graph-id "graph-1"}}
+               address "0xAbCdEf0123456789aBcDeF0123456789AbCdEf01"]
+           (-> (p/with-redefs [index/<user-is-manager? (fn [_db _graph-id _user-id]
+                                                         (p/resolved true))
+                               index/<graph-member-upsert! (fn [_db graph-id member-id role invited-by]
+                                                             (swap! upserts conj [graph-id member-id role invited-by])
+                                                             (p/resolved true))]
+                 (p/let [ok (<handle {:request (post {:user-id address}) :env #js {} :route route})
+                         ok-body (<json-body ok)
+                         by-email (<handle {:request (post {:email "ada@example.com"}) :env #js {} :route route})
+                         short (<handle {:request (post {:user-id "0x1234"}) :env #js {} :route route})]
+                   (is (= 200 (.-status ok)))
+                   (is (= {:ok true} ok-body))
+                   (is (= [["graph-1" (string/lower-case address) "member" "user-1"]] @upserts))
+                   (is (= 400 (.-status by-email)))
+                   (is (= 400 (.-status short)))
+                   (is (= 1 (count @upserts)))))
+               (p/then (fn []
+                         (done)))
+               (p/catch (fn [error]
+                          (is false (str error))
+                          (done)))))))
+
 (deftest graphs-delete-removes-storage-then-the-key-test
   (async done
          (let [request (js/Request. "http://localhost/graphs/graph-1" #js {:method "DELETE"})

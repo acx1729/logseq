@@ -7,9 +7,8 @@
   (when claims
     (let [user-id (aget claims "sub")
           username (aget claims "username")]
-      (when (string? user-id)
-        (cond-> {:user-id user-id}
-          (string? username) (assoc :username username))))))
+      (when (and (string? user-id) (string? username))
+        {:user-id user-id :username username}))))
 
 (defn presence*
   [^js self]

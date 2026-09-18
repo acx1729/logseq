@@ -99,7 +99,12 @@
    {:id "0003-drop-key-tables"
     :statements
     ["drop table if exists user_rsa_keys"
-     "drop table if exists graph_aes_keys"]}])
+     "drop table if exists graph_aes_keys"]}
+   {:id "0005-drop-user-email"
+    :statements
+    ["drop index if exists idx_users_email"
+     "alter table users drop column email_verified"
+     "alter table users drop column email"]}])
 
 (defn- <run-statements! [db statements]
   (reduce (fn [acc statement]
@@ -355,16 +360,6 @@
       (throw (ex-info "user row missing after sign-in" {:user-id user-id})))
     (aget row "username")))
 
-(defn <user-id-by-email [db email]
-  (when (string? email)
-    (p/let [result (common/<d1-all db {:session "first-primary"}
-                                   "select id from users where email = ?"
-                                   email)
-            rows (common/get-sql-rows result)
-            row (first rows)]
-      (when row
-        (aget row "id")))))
-
 (defn <graph-member-upsert! [db graph-id user-id role invited-by]
   (let [now (common/now-ms)]
     (common/<d1-run db
@@ -382,7 +377,7 @@
 (defn <graph-members-list [db graph-id]
   (p/let [result (common/<d1-all db {:session "first-primary"}
                                  (str "select m.user_id, m.graph_id, m.role, m.invited_by, m.created_at, "
-                                      "u.email, u.username "
+                                      "u.username "
                                       "from graph_members m "
                                       "left join users u on m.user_id = u.id "
                                       "where m.graph_id = ? order by m.created_at asc")
@@ -394,7 +389,6 @@
              :role (aget row "role")
              :invited-by (aget row "invited_by")
              :created-at (aget row "created_at")
-             :email (aget row "email")
              :username (aget row "username")})
           rows)))
 

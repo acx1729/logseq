@@ -1,5 +1,6 @@
 (ns logseq.db-sync.worker.handler.index
-  (:require [lambdaisland.glogi :as log]
+  (:require [clojure.string :as string]
+            [lambdaisland.glogi :as log]
             [logseq.db-sync.common :as common]
             [logseq.db-sync.index :as index]
             [logseq.db-sync.worker.auth :as auth]
@@ -20,6 +21,11 @@
     (and (string? expected)
          (seq expected)
          (= expected actual))))
+
+(defn- wallet-address?
+  "A lowercase EVM address, the id every signed-in person has."
+  [s]
+  (boolean (and (string? s) (re-matches #"0x[0-9a-f]{40}" s))))
 
 (defn- graph-key-store
   "The graph key store the adapter injects; every graph key lives there and
@@ -205,28 +211,21 @@
                    (http/bad-request "missing body")
                    (let [body (js->clj result :keywordize-keys true)
                          body (http/coerce-http-request :graph-members/create body)
-                         member-id (:user-id body)
-                         email (:email body)
+                         member-id (some-> (:user-id body) string/lower-case)
                          role (or (:role body) "member")]
                      (cond
                        (nil? body)
                        (http/bad-request "invalid body")
 
-                       (and (not (string? member-id))
-                            (not (string? email)))
-                       (http/bad-request "invalid user")
+                       (not (wallet-address? member-id))
+                       (http/bad-request "invalid user id")
 
                        :else
-                       (p/let [manager? (index/<user-is-manager? db graph-id user-id)
-                               resolved-id (if (string? member-id)
-                                             (p/resolved member-id)
-                                             (index/<user-id-by-email db email))]
+                       (p/let [manager? (index/<user-is-manager? db graph-id user-id)]
                          (if (not manager?)
                            (http/forbidden)
-                           (if-not (string? resolved-id)
-                             (http/bad-request "user not found")
-                             (p/let [_ (index/<graph-member-upsert! db graph-id resolved-id role user-id)]
-                               (http/json-response :graph-members/create {:ok true})))))))))))
+                           (p/let [_ (index/<graph-member-upsert! db graph-id member-id role user-id)]
+                             (http/json-response :graph-members/create {:ok true}))))))))))
 
       :graph-members/update
       (cond
